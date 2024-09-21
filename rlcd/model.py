@@ -37,13 +37,14 @@ class Estimator_T(Estimator):
         s,a,s_ = inputs
 
         self.n[inputs] = min(self.n[inputs]+1, self.M)
-        self.v[s,a] += self.delta(value, *inputs)
+        self.v[s,a] += np.array([self.delta(value, s,a,s_,k) for k in range(S) ])
         
     def e(self, value=1, *inputs):
         """
         $e^T_{m} = 1-2(Z_T \sum_{k \in S}\Delta\hat{T}_m(k)^2)$ 
         """
-        return 1-2*  self.z(*inputs)  * np.sum(self.delta(value, *inputs)**2)
+        S = self.n.shape[0]
+        return 1-2*  self.z(*inputs) * np.sum([self.delta(value, *inputs, k)**2 for k in range(S)] )
     
     def z(self, *inputs):
         """
@@ -52,7 +53,7 @@ class Estimator_T(Estimator):
         s,a,_ = inputs
         return (1/2)*(np.sum(self.n[s,a])+1)**2    
 
-    def delta(self, value=1, *inputs):
+    def delta(self, value, s,a,s_,k):
         """
         $
             \Delta \hat{T}_m(k) = 
@@ -63,14 +64,11 @@ class Estimator_T(Estimator):
                 \end{cases} 
         $  
         """
-        S = self.n.shape[0]
-        s,a,s_ = inputs
-        d = lambda k: (
-                (value-self.v[s,a,k])/(np.sum(self.n[s,a])+1) 
-                    if k==s_ else 
-                (0-self.v[s,a,k])/(np.sum(self.n[s,a])+1)
-            )
-        return np.array([d(k) for k in range(S)])
+        if k==s_:
+            return (value-self.v[s,a,k])/(np.sum(self.n[s,a])+1) 
+        else: 
+            return (0-self.v[s,a,k])/(np.sum(self.n[s,a])+1)
+
 
 class Model(Model):
     def __init__(self, S,A, Omega=.5, M=1e2, rho=.9):
@@ -83,12 +81,22 @@ class Model(Model):
         self.rho = rho
         self._E = 0 
 
+    def c(self, s,a):
+        """
+        $c_m(s,a) = \frac{N_m(s,a)}{M}$  
+        """
+        return np.sum(self.t.n[s,a])/self.M
+
     def e(self, s,a,s_,r):
-        nm = min(np.sum(self.t.n[s,a])+1, self.t.M)
-        cm = nm/self.t.M
-        return cm*(self.Omega * self.r.e(r, s,a,s_) + (1-self.Omega) * self.t.e(1, s,a,s_))
+        """
+        $e_m = c_m(s,a) (\Omega e^R_m + (1-\Omega)e^T_m)$
+        """
+        return self.c(s,a) * (self.Omega * self.r.e(r, s,a,s_) + (1-self.Omega) * self.t.e(1, s,a,s_))
     
     def E(self, s,a,s_,r):
+        """
+        $E_m = E_m + \rho(e_m - E_m)$
+        """
         self._E += self.rho*(self.e(s,a,s_,r) - self._E)
         return self._E
 

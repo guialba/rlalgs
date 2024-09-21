@@ -4,7 +4,7 @@ from scipy.special import softmax
 class Estimator:
     def __init__(self, *inputs):
         self.n = np.zeros(inputs)     
-        self.v = np.zeros(inputs) 
+        self.v = np.ones(inputs) / inputs[0]
 
     def train(self, value=1, *inputs):
         self.n[inputs] += 1
@@ -29,7 +29,8 @@ class Model:
         self.r.train(r, s,a,s_)
     
     def sample(self, s, a): 
-        s_ = np.random.choice(len(self.S), p=softmax(self.t.predict(s,a)))
+        # s_ = np.random.choice(len(self.S), p=softmax(self.t.predict(s,a)))
+        s_ = np.random.choice(len(self.S), p=self.t.predict(s,a))
         r = self.r.predict(s,a,s_)
         return s_,r
         
