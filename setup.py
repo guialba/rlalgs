@@ -8,6 +8,9 @@ setup(
     install_requires=[
         'numpy',
         'scipy',
+        'pandas',
+        'gymnasium',
+        'pygame',
     ],
     packages=find_packages()
 )
