@@ -1,2 +1,5 @@
 -e .
 git+https://github.com/guialba/rlenvs.git
+matplotlib
+hmmlearn
+sklearn

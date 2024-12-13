@@ -11,6 +11,7 @@ setup(
         'pandas',
         'gymnasium',
         'pygame',
+        'torch',
     ],
     packages=find_packages()
 )

@@ -5,15 +5,16 @@ import pandas as pd
 n=500
 
 # env = gym.make("CartPole-v1", render_mode="human")
-env = gym.make("custom/CartPole-v1", render_mode="human")
-env.action_space.seed(82)
+# env = gym.make("custom/CartPole-v1", render_mode="human")
+env = gym.make("custom/DiscreteCartPole-v1", render_mode="human")
 
-observation, info = env.reset(seed=82, masspole=.45, length=1.0)
+observation, info = env.reset(seed=82, options={'masspole':.45, 'length':1.0})
 hist_s = [observation]
 hist_a = []
 for _ in range(n):
     # action = env.action_space.sample()
     # action = 1
+    print("observation : ",observation);
     action = int(input())-1
     if not(action in [0,1]):
         break
