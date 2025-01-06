@@ -35,6 +35,7 @@ def generate_hist(n=500, m=10):
 
     hist_s = np.array([observation])
     hist_a = np.array([])
+    hist_r = np.array([])
     hist_p = np.array([list(options.values())])
     for i in range(n):
         action = int(np.random.choice([0,1], size=1)[0])
@@ -42,6 +43,7 @@ def generate_hist(n=500, m=10):
         
         hist_s = np.concat([hist_s, [observation]])
         hist_a = np.concat([hist_a, [action]])
+        hist_r = np.concat([hist_r, [reward]])
         hist_p = np.concat([hist_p, [list(options.values())]])
 
         if terminated or truncated:
@@ -57,9 +59,9 @@ def generate_hist(n=500, m=10):
             observation, info = env.reset(seed=i, options=options)
             
     env.close()
-    return hist_s, hist_a, hist_p
+    return hist_s, hist_a, hist_r, hist_p
 
-def train_test_split(hist_s, hist_a, hist_p, mode='all', p=.3):
+def train_test_split(hist_s, hist_a, hist_r, hist_p, mode='all', p=.3):
     """
         hist_s: Historic data for s 
         hist_a: Historic data for a
@@ -72,9 +74,10 @@ def train_test_split(hist_s, hist_a, hist_p, mode='all', p=.3):
     input_s_2 = hist_s[2:,2:] # Getting ony two dimensions of state
     input_a = np.expand_dims(hist_a[:-1], axis=1)
     input_a_ = np.expand_dims(hist_a[1:], axis=1)
+    input_r = np.expand_dims(hist_r[:-1], axis=1)
     input_p = hist_p[:-2]
     input_all = np.concat([input_s, input_a, input_s_, input_a_, input_p], axis=1)
-    output_all = np.concat([input_s_2, input_p], axis=1)
+    output_all = np.concat([input_s_2, input_r, input_p], axis=1)
 
     split = int(input_all.shape[0] * (1-p))
 

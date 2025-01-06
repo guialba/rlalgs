@@ -10,9 +10,82 @@ Modelo amostral de transição:
     outuput: S_
 """
 
-class EstimatorBase(nn.Module):
+class Normalizer:
+    def __init__(self, s,a,p=None, output=2):
+        self.inputs_dimensions = {'s':s, 'a':a, 'p':p} if p else {'s':s, 'a':a}
+        self.inputs = {
+            'all' : ['s','a','s','a'],
+            'param' : ['s','a','s'],
+            'state' : ['s','a','p'],
+        }
+
+        self.normalizer_params = {
+            k: {
+                "min": torch.zeros(v),
+                'max': torch.zeros(v)
+            }
+            for k,v in self.inputs_dimensions.items()
+        }
+
+        self.normalizer_input = {
+            "min": torch.zeros(sum([s,a,p])) if p else torch.zeros(sum([s,a])),
+            'max': torch.zeros(sum([s,a,p])) if p else torch.zeros(sum([s,a]))
+        }
+        self.normalizer_output = {
+            "min": torch.zeros(output),
+            'max': torch.zeros(output)
+        }
+    
+    def setNormalizationParams(self, mode='all'):
+        self.normalizer_input = {
+            'min': torch.concat([self.normalizer_params[i]['min'] for i in self.inputs[mode]], axis=0),
+            'max': torch.concat([self.normalizer_params[i]['max'] for i in self.inputs[mode]], axis=0)
+        }
+
+    def updateNormalizationParams(self, x,y, mode='all'):
+        offset=0
+        pointer=0
+        for i in self.inputs[mode]:
+            pointer = offset+self.inputs_dimensions[i]
+            temp = torch.concat([self.normalizer_params[i]['max'].reshape(1,-1), self.normalizer_params[i]['min'].reshape(1,-1), x[:,offset:pointer]], axis=0)
+            self.normalizer_params[i]['min'] = torch.min(temp, axis=0).values
+            # Gambiarra para anular valores inf
+            max_mask = torch.max(temp, axis=0).values 
+            self.normalizer_params[i]['max'] = torch.where(torch.isinf(max_mask), torch.tensor(0.0), max_mask)
+            ###
+            offset = pointer
+
+        temp = torch.concat([self.normalizer_output['max'].reshape(1,-1), self.normalizer_output['min'].reshape(1,-1), y], axis=0)
+        self.normalizer_output['min'] = torch.min(temp, axis=0).values
+        self.normalizer_output['max'] = torch.max(temp, axis=0).values
+
+    def normilize(self, value, params):
+        range = params['max'] - params['min']
+        return (value - params['min']) / range
+    def denormilize(self, value, params):
+        range = params['max'] - params['min']
+        return value * range + params['min']
+
+class RewardEstimatorBase(nn.Module):
+    def __init__(self, s,a, hidden_size, output=1):
+        super(RewardEstimatorBase, self).__init__()
+        self.input_set = sum([s])
+
+        self.l1 = nn.Linear(self.input_set, output)
+        # self.l1 = nn.Linear(self.input_set, hidden_size)
+        # self.l2 = nn.Linear(hidden_size, output)
+        self.relu = nn.ReLU()
+        self.sig = nn.Sigmoid()
+
+    def forward(self, x):
+        out = self.l1(x)
+        out = self.relu(out)
+        # out = self.l2(out)
+        out = self.sig(out)
+        return out
+class TransitionEstimatorBase(nn.Module):
     def __init__(self, s,a, hidden_size, output):
-        super(EstimatorBase, self).__init__()
+        super(TransitionEstimatorBase, self).__init__()
         self.input_set = sum([s,a,s,a])
 
         self.l1 = nn.Linear(self.input_set, hidden_size)
@@ -34,9 +107,9 @@ class ModelBase():
                 input_size = (2, 1), # 2d for s and s_, 1d for a and a_
                 hidden_size = 10,
                 output = 2, #2d for s_
-                learning_rate = 0.001,
-                criterion_clss = nn.MSELoss,
-                optimizer_clss = optim.Adam
+                learning_rate = [0.001, 0.001],
+                criterion_clss = [nn.MSELoss, nn.BCELoss],
+                optimizer_clss = [optim.Adam, optim.Adam]
             ) -> None:
         
         self.input_size = input_size
@@ -44,28 +117,57 @@ class ModelBase():
         self.output = output
         self.learning_rate = learning_rate
 
-        self.estimator = EstimatorBase(*input_size, hidden_size, output)
+        self.estimatorT = TransitionEstimatorBase(*input_size, hidden_size, output)
+        self.estimatorR = RewardEstimatorBase(*input_size, hidden_size)
         
-        self.criterion = criterion_clss()
-        self.optimizer = optimizer_clss(self.estimator.parameters(), lr=learning_rate)
+        self.criterionT = criterion_clss[0]()
+        self.criterionR = criterion_clss[1]()
+        self.optimizerT = optimizer_clss[0](self.estimatorT.parameters(), lr=learning_rate[0])
+        self.optimizerR = optimizer_clss[1](self.estimatorR.parameters(), lr=learning_rate[1])
+
+        self.normalizer = Normalizer(*input_size, output=output)
 
     def train(self, X_train, y_train, num_epochs=100, debug=False, mode='all'):
+        self.normalizer.updateNormalizationParams(X_train, y_train[:,:-1], mode)
+        self.normalizer.setNormalizationParams(mode)
         for epoch in range(num_epochs):
-            outputs = self.estimator(X_train, mode)
-            loss = self.criterion(outputs, y_train)
+            # Training Transition Estimator
+            # outputs = self.estimatorT(X_train, mode)
+            outputs = self.estimatorT(self.normalizer.normilize(X_train, self.normalizer.normalizer_input), mode)
+            # loss = self.criterionT(outputs, y_train[:,:-1])
+            loss = self.criterionT(outputs, self.normalizer.normilize(y_train[:,:-1], self.normalizer.normalizer_output))
 
-            self.optimizer.zero_grad()
+            self.optimizerT.zero_grad()
             loss.backward()
-            self.optimizer.step()  
+            self.optimizerT.step()  
 
             if debug and (epoch+1) % 10 == 0:
-                print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')  
+                print(f'Epoch [{epoch+1}/{num_epochs}], Transition Loss: {loss.item():.4f}')  
 
-    def predict(self, x, mode='all'):
-        value = None
+            # Training Reward Estimator
+            outputs = self.estimatorR(X_train[:,3:-1])
+            # loss = self.criterionR(outputs.squeeze(), y_train[:,-1])
+            try:
+                loss = self.criterionR(outputs.squeeze(), y_train[:,-1])
+            except Exception as e:
+                raise e
+
+            self.optimizerR.zero_grad()
+            loss.backward()
+            self.optimizerR.step()  
+
+            if debug and (epoch+1) % 10 == 0:
+                print(f'Epoch [{epoch+1}/{num_epochs}], Reward Loss: {loss.item():.4f}')  
+
+    def sample(self, x, mode='all'):
+        self.normalizer.setNormalizationParams(mode)
+        s,r = None, None
         with torch.no_grad():
-            value = self.estimator(x, mode)
-        return value
+            # s = self.estimatorT(x, mode)
+            s = self.estimatorT(self.normalizer.normilize(x, self.normalizer.normalizer_input), mode)
+            r = self.estimatorR(x[:,:self.input_size[0]])
+        # return s,r
+        return self.normalizer.denormilize(s, self.normalizer.normalizer_output),r
     
 """
 Parameterized Model Based Reinforcement Learning (PMBRL):
@@ -74,9 +176,9 @@ Modelo amostral de transição:
     outuput: S_
 """
 
-class Estimator(nn.Module):
+class TransitionEstimator(nn.Module):
     def __init__(self, s,a,p, hidden_size, output):
-        super(Estimator, self).__init__()
+        super(TransitionEstimator, self).__init__()
         self._s = s
         self._a = a
         self._p = p
@@ -138,9 +240,9 @@ class Model():
                 input_size = (2, 1, 2), # 2d for s and s_, 1d for a and a_, and 2d for p,
                 hidden_size = 10,
                 output = 2, #2d for s_
-                learning_rate = 0.001,
-                criterion_clss = nn.MSELoss,
-                optimizer_clss = optim.Adam
+                learning_rate = [0.001, 0.001],
+                criterion_clss = [nn.MSELoss, nn.BCELoss],
+                optimizer_clss = [optim.Adam, optim.Adam]
             ) -> None:
         
         self.input_size = input_size
@@ -148,71 +250,15 @@ class Model():
         self.output = output
         self.learning_rate = learning_rate
 
-        self.estimator = Estimator(*input_size, hidden_size, output)
+        self.estimatorT = TransitionEstimator(*input_size, hidden_size, output)
+        self.estimatorR = RewardEstimatorBase(input_size[0],input_size[1], hidden_size)
         
-        self.criterion = criterion_clss()
-        self.optimizer = optimizer_clss(self.estimator.parameters(), lr=learning_rate)
+        self.criterionT = criterion_clss[0]()
+        self.criterionR = criterion_clss[1]()
+        self.optimizerT = optimizer_clss[0](self.estimatorT.parameters(), lr=learning_rate[0])
+        self.optimizerR = optimizer_clss[1](self.estimatorR.parameters(), lr=learning_rate[1])
 
-        s,a,p = input_size
-        self.inputs_dimensions = {'s':s, 'a':a, 'p':p}
-        self.normalizer_params = {
-            k: {
-                "min": torch.zeros(v),
-                'max': torch.zeros(v)
-            }
-            for k,v in self.inputs_dimensions.items()
-        }
-
-        self.normalizer_input = {
-            "min": torch.zeros(sum([*input_size])),
-            'max': torch.zeros(sum([*input_size]))
-        }
-        self.normalizer_output = {
-            "min": torch.zeros(output),
-            'max': torch.zeros(output)
-        }
-
-    def setNormalizationParams(self, mode):
-        inputs = {
-            'all' : ['s','a','s','a'],
-            'param' : ['s','a','s'],
-            'state' : ['s','a','p'],
-        }
-
-        self.normalizer_input = {
-            'min': torch.concat([self.normalizer_params[i]['min'] for i in inputs[mode]], axis=0),
-            'max': torch.concat([self.normalizer_params[i]['max'] for i in inputs[mode]], axis=0)
-        }
-
-    def updateNormalizationParams(self, x,y, mode):
-        inputs = {
-            'all' : ['s','a','s','a'],
-            'param' : ['s','a','s'],
-            'state' : ['s','a','p'],
-        }
-        offset=0
-        pointer=0
-        for i in inputs[mode]:
-            pointer = offset+self.inputs_dimensions[i]
-            temp = torch.concat([self.normalizer_params[i]['max'].reshape(1,-1), self.normalizer_params[i]['min'].reshape(1,-1), x[:,offset:pointer]], axis=0)
-            self.normalizer_params[i]['min'] = torch.min(temp, axis=0).values
-            # Gambiarra para anular valores inf
-            max_mask = torch.max(temp, axis=0).values 
-            self.normalizer_params[i]['max'] = torch.where(torch.isinf(max_mask), torch.tensor(0.0), max_mask)
-            ###
-            offset = pointer
-
-        temp = torch.concat([self.normalizer_output['max'].reshape(1,-1), self.normalizer_output['min'].reshape(1,-1), y], axis=0)
-        self.normalizer_output['min'] = torch.min(temp, axis=0).values
-        self.normalizer_output['max'] = torch.max(temp, axis=0).values
-
-    def normilize(self, value, params):
-        range = params['max'] - params['min']
-        return (value - params['min']) / range
-    def denormilize(self, value, params):
-        range = params['max'] - params['min']
-        return value * range + params['min']
-
+        self.normalizer = Normalizer(*input_size, output=output)
 
     def train(self, X_train, y_train, num_epochs=100, debug=False, mode='all'):
         """
@@ -225,22 +271,41 @@ class Model():
                 'param' - Uses the set of inputs (s, a, s') for estimating only the parameters (p)
                 'state' - Uses the set of inputs (s', a', p) for estimating only the state (s'')
         """
-        self.updateNormalizationParams(X_train, y_train, mode)
-        self.setNormalizationParams(mode)
+        self.normalizer.updateNormalizationParams(X_train, y_train[:,:-1], mode)
+        self.normalizer.setNormalizationParams(mode)
         # Training loop
         for epoch in range(num_epochs):
-            outputs = self.estimator(self.normilize(X_train, self.normalizer_input), mode)
-            loss = self.criterion(outputs, self.normilize(y_train, self.normalizer_output))
+            # Training Transition Estimator
+            outputs = self.estimatorT(self.normalizer.normilize(X_train, self.normalizer.normalizer_input), mode)
+            loss = self.criterionT(outputs, self.normalizer.normilize(y_train[:,:-1], self.normalizer.normalizer_output))
 
-            self.optimizer.zero_grad()
+            self.optimizerT.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.estimator.parameters(), max_norm=1.0) 
-            self.optimizer.step()  
+            torch.nn.utils.clip_grad_norm_(self.estimatorT.parameters(), max_norm=1.0) 
+            self.optimizerT.step()  
 
             if debug and (epoch+1) % 10 == 0:
-                print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')  
+                print(f'Epoch [{epoch+1}/{num_epochs}], Transition Loss: {loss.item():.4f}')  
 
-    def predict(self, x, mode='all'):
+            # Training Reward Estimator
+            if mode == 'all':
+                outputs = self.estimatorR(X_train[:,3:-1])
+                # loss = self.criterionR(outputs.squeeze(), y_train[:,-1])
+                try:
+                    loss = self.criterionR(outputs.squeeze(), y_train[:,-1])
+                except Exception as e:
+                    raise e
+
+                self.optimizerR.zero_grad()
+                loss.backward()
+                self.optimizerR.step()  
+
+                if debug and (epoch+1) % 10 == 0:
+                    print(f'Epoch [{epoch+1}/{num_epochs}], Reward Loss: {loss.item():.4f}')  
+            else:
+                print(f'Trainning Reward model is not implemented for {mode} mode')
+
+    def sample(self, x, mode='all'):
         """
             x: Input data, its format depends on the mode. It can be (s,a,s',a'), (s,a,s'), or (s',a',p)
             mode: one of the oprions:
@@ -248,8 +313,9 @@ class Model():
                 'param' - Uses the set of inputs (s, a, s') for estimating only the parameters (p)
                 'state' - Uses the set of inputs (s', a', p) for estimating only the state (s'')
         """
-        self.setNormalizationParams(mode)
-        value = None
+        self.normalizer.setNormalizationParams(mode)
+        s,r = None, None
         with torch.no_grad():
-            value = self.estimator(self.normilize(x, self.normalizer_input), mode)
-        return self.denormilize(value, self.normalizer_output)
+            s = self.estimatorT(self.normalizer.normilize(x, self.normalizer.normalizer_input), mode)
+            r = self.estimatorR(x[:,:self.input_size[0]])
+        return self.normalizer.denormilize(s, self.normalizer.normalizer_output), r
