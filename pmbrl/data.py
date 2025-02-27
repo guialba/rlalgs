@@ -17,6 +17,103 @@ default_params = {
     # 'polemass_length': self.masspole * self.length,
 }
 
+
+random_policy = lambda _: int(np.random.choice([0,1], size=1)[0])
+
+def generate_episode(size_limit=100, env=None, policy=None, options=None, seed=None):
+    seed = seed or np.random.randint(1000)
+    options = options if options else {
+        'masspole': round(np.random.rand(), 2),
+        'length': np.random.randint(low=0, high=20)/10
+    }
+    policy = policy if policy else random_policy
+
+    if env is None:
+        env = gym.make("custom/DiscreteCartPole-v1")
+        
+    observation, info = env.reset(seed=seed, options=options)
+    hist = []
+    while len(hist) < size_limit:
+    # for i in range(size_limit):
+        action = policy(observation)
+        s_,reward, terminated, truncated, info = env.step(action)
+        
+        d = [round(n, 4) for n in observation[2:].tolist() + [action, reward] + list(options.values()) + s_[2:].tolist()]
+        hist.append(np.array(d).flatten())
+        
+        observation = s_
+        if terminated or truncated:
+            if len(hist) > 1:
+                break
+            else:
+                # observation, info = env.reset(seed=seed, options=options) 
+                observation, info = env.reset(options=options)
+                hist = []
+
+    env.close()
+    return  np.array(hist)
+
+def build_train_data(data, dimensions=None):
+    dimensions = dimensions if dimensions is not None else {
+        's': 2, 'a':1, 'r': 1, 'p':2
+    }
+    iS = dimensions['s']
+    iA = iS+dimensions['a']
+    iR = iA+dimensions['r']
+    iP = iR+dimensions['p']
+    iS_ = iP+dimensions['s']
+
+    s,a,r,p,s_ = data[:-1,:iS], data[:-1,iS:iA], data[:-1,iA:iR], data[:-1,iR:iP], data[:-1,iP:iS_] 
+    s_,a_,r_,p_,s__ =  data[1:,:iS], data[1:,iS:iA], data[1:,iA:iR], data[1:,iR:iP], data[1:,iP:iS_] 
+
+    input_all = np.concat([s, a, s_, a_], axis=1)
+    output_all = np.concat([s__, r_, p], axis=1)
+
+    X = torch.tensor(input_all, dtype=torch.float32)
+    y = torch.tensor(output_all, dtype=torch.float32)
+
+    return X, y
+
+def build_data(data, dimensions=None):
+    dimensions = dimensions if dimensions is not None else {
+        's': 2, 'a':1, 'r': 1, 'p':2
+    }
+    iS = dimensions['s']
+    iA = iS+dimensions['a']
+    iR = iA+dimensions['r']
+    iP = iR+dimensions['p']
+    iS_ = iP+dimensions['s']
+
+    s,a,r,p,s_ = data[:-1,:iS], data[:-1,iS:iA], data[:-1,iA:iR], data[:-1,iR:iP], data[:-1,iP:iS_] 
+    s_,a_,r_,p_,s__ =  data[1:,:iS], data[1:,iS:iA], data[1:,iA:iR], data[1:,iR:iP], data[1:,iP:iS_] 
+
+    input_all = np.concat([s, a, s_, a_, s__, r_, p], axis=1)
+
+    return input_all
+
+def train_data(data, random=True, dimensions=None):
+    dimensions = dimensions if dimensions is not None else {
+        's': 2, 'a':1, 'r': 1, 'p':2
+    }
+
+    if random:
+        n = data.shape[0]
+        index = np.random.choice(n, n, replace=False)  
+    else:
+        index = np.arange(n)
+
+    dataset = data[index]
+
+    input_index = dimensions['s']*2 + dimensions['a']*2
+    input_all = dataset[:,:input_index]
+    output_all = dataset[:, input_index:]
+
+    X = torch.tensor(input_all, dtype=torch.float32)
+    y = torch.tensor(output_all, dtype=torch.float32)
+    return X,y
+
+
+
 def generate_hist(n=500, m=10):
     """
         n: total number of steps in any amount of episodes
