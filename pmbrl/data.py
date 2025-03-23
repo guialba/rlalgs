@@ -1,9 +1,11 @@
+from typing import Any, Dict
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import gymnasium as gym
 import rlenvs
+import pandas as pd
 
 
 default_params = {
@@ -199,3 +201,111 @@ def train_test_split(hist_s, hist_a, hist_r, hist_p, mode='all', p=.3):
         X_train, y_train = X_train[:,-5:], y_train[:,:-2]
         X_test, y_test = X_test[:,-5:], y_test[:,:-2]
         return X_train, y_train, X_test, y_test
+
+
+class Experiment_Data:
+    def load(self, path:str) -> None:
+        assert self.raw_data != None, "No data to export"
+        self.path = path
+        self.raw_data = pd.read_csv(path)
+        return self.raw_data
+
+    def save(self, path:str) -> None:
+        assert self.raw_data != None, "No data to export"
+        self.path = path
+        self.raw_data.to_csv(path)
+
+    def build_training_dataset(self, data:pd.DataFrame=None, randomize=True) -> pd.DataFrame:
+        if data is None:
+            data = self.raw_data
+        next_steps = data.groupby('episode')[['s','a','r','s_']].shift(-1)
+        data[['s_','a_','r_','s__']] = next_steps
+        self.training_dataset = data[['step', 'episode', 'p',  's', 'a', 'r', 's_', 'a_', 'r_', 's__']].dropna().reset_index(drop=True)
+        
+        n = self.training_dataset.shape[0]
+        index = np.random.choice(n, n, replace=False) if randomize else np.arange(n)
+        self.training_dataset = self.training_dataset.iloc[index]
+        return self.training_dataset
+    
+    def search(self, anchor:pd.Series, positive=True) -> pd.Series:
+        # Logic to match refferences 
+        if positive == True:
+            distance = (self.training_dataset['p'] == anchor['p']) & (self.training_dataset['a'] == anchor['a'])
+        else:
+            distance = (self.training_dataset['p'] != anchor['p']) & (self.training_dataset['a'] == anchor['a'])
+        ##
+        filtered = self.training_dataset[distance].reset_index(drop=True)
+        index = np.random.choice(filtered.shape[0], 1, replace=False)  
+        reff = filtered.loc[index]
+        return pd.Series(reff[['s','a','s_', 'p']].values[0], index=['s','a','s_','p'])
+
+    def get_features_targets(self, data:pd.DataFrame=None) -> torch.Tensor:
+        if data is None:
+            data = self.training_dataset
+
+        features = data[['s', 'a', 's_', 'a_']]
+        target = data[['s__', 'r', 'p']]
+
+        # get refferences 
+        features[['positive_s','positive_a','positive_s_','positive_p']] = features.apply(lambda row: self.search(row, positive=True), axis=1, result_type='expand')
+        features[['negative_s','negative_a','negative_s_','negative_p']] = features.apply(lambda row: self.search(row, positive=False), axis=1, result_type='expand')
+        
+        # expand dimensions for s's
+        features[['s0','s1','s2','s3']] = features.apply(lambda row:pd.Series(row['s']), axis=1)
+        features[['s_0','s_1','s_2','s_3']] = features.apply(lambda row:pd.Series(row['s_']), axis=1)
+        features[['positive_s0','positive_s1','positive_s2','positive_s3']] = features.apply(lambda row:pd.Series(row['positive_s']), axis=1)
+        features[['positive_s_0','positive_s_1','positive_s_2','positive_s_3']] = features.apply(lambda row:pd.Series(row['positive_s_']), axis=1)
+        features[['negative_s0','negative_s1','negative_s2','negative_s3']] = features.apply(lambda row:pd.Series(row['negative_s']), axis=1)
+        features[['negative_s_0','negative_s_1','negative_s_2','negative_s_3']] = features.apply(lambda row:pd.Series(row['negative_s_']), axis=1)
+        
+        # expand dimensions for s and p
+        target[['s0','s1','s2','s3']] = features.apply(lambda row:pd.Series(row['s__']), axis=1)
+        target[['p0','p1']] = features.apply(lambda row:pd.Series(row['p']), axis=1)
+        target[['positive_p0','positive_p1']] = features.apply(lambda row:pd.Series(row['positive_p']), axis=1)
+        target[['negative_p0','negative_p1']] = features.apply(lambda row:pd.Series(row['negative_p']), axis=1)
+
+        self.features = features
+        self.target = target
+        return (
+            torch.tensor(self.features[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_', 
+                                   'positive_s0','positive_s1','positive_s2','positive_s3', 'positive_a', 'positive_s_0','positive_s_1','positive_s_2','positive_s_3',
+                                   'negative_s0','negative_s1','negative_s2','negative_s3', 'negative_a', 'negative_s_0','negative_s_1','negative_s_2','negative_s_3'
+                                   ]].values), 
+            torch.tensor(self.target[['s0','s1','s2','s3', 'r', 'p0','p1', 'positive_p0','positive_p1', 'negative_p0','negative_p1']].values)
+        )
+
+    def generate_episodes(self, n_episodes:int = 100, env:Any = None) -> pd.DataFrame:
+        data:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
+        self.raw_data = pd.concat(data)
+        return self.raw_data
+
+    def __add__(self, val):
+        self.raw_data = pd.concat([self.raw_data, val.raw_data])
+        return self
+    def __repr__(self):
+        return str(self.raw_data.head())
+
+    @staticmethod
+    def episode(env:Any = None, policy:callable = None, options:Dict[str, Any] = None, seed:int = None) -> pd.DataFrame:
+        seed = seed or np.random.randint(1000)
+        policy = policy or (lambda _: int(np.random.choice([0,1], size=1)[0]))
+        env = env or gym.make("custom/CartPole-v1")
+        options = options or {
+            'masspole': round(np.random.rand(), 2),
+            'length': np.random.randint(low=0, high=20)/10
+        }
+        # Generate episode logic
+        s, info = env.reset(seed=seed, options=options)
+        data, step = [], 0
+        while True:
+            a = policy(s)
+            s_,r, terminated, truncated, info = env.step(a)
+            data.append({'step':step, 's':s.round(3), 'a':a, 'r':r, 's_':s_.round(3), 'p':options.values()})
+            s = s_
+            step += 1
+            if terminated or truncated:
+                break
+        env.close()
+        return pd.DataFrame.from_dict(data)
+
+    
