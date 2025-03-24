@@ -204,6 +204,28 @@ def train_test_split(hist_s, hist_a, hist_r, hist_p, mode='all', p=.3):
 
 
 class Experiment_Data:
+    features_slices = {
+        'model_ready': slice(0,10,1),
+        's': slice(0,4,1),
+        'a': slice(4,5,1),
+        's_': slice(5,9,1),
+        'a_': slice(9,10,1),
+        'positive_s': slice(10,14,1),
+        'positive_a': slice(14,15,1),
+        'positive_s_': slice(15,19,1),
+        'negative_s': slice(19,23,1),
+        'negative_a': slice(23,24,1),
+        'negative_s_': slice(24,28,1),
+    }
+    targets_slices = {
+        's': slice(0,4,1),
+        'r': slice(4,5,1),
+        'p': slice(5,7,1),
+        'positive_p': slice(7,9,1),
+        'negative_p': slice(9,11,1),
+    }
+
+
     def load(self, path:str) -> None:
         assert self.raw_data != None, "No data to export"
         self.path = path
@@ -214,6 +236,11 @@ class Experiment_Data:
         assert self.raw_data != None, "No data to export"
         self.path = path
         self.raw_data.to_csv(path)
+
+    def generate_episodes(self, n_episodes:int = 100, env:Any = None) -> pd.DataFrame:
+        data:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
+        self.raw_data = pd.concat(data)
+        return self.raw_data
 
     def build_training_dataset(self, data:pd.DataFrame=None, randomize=True) -> pd.DataFrame:
         if data is None:
@@ -241,10 +268,10 @@ class Experiment_Data:
 
     def get_features_targets(self, data:pd.DataFrame=None) -> torch.Tensor:
         if data is None:
-            data = self.training_dataset
+            data = self.training_dataset.copy()
 
-        features = data[['s', 'a', 's_', 'a_']]
-        target = data[['s__', 'r', 'p']]
+        features = data[['s', 'a', 's_', 'a_', 'p']].copy()
+        target = data[['s__', 'r', 'p']].copy()
 
         # get refferences 
         features[['positive_s','positive_a','positive_s_','positive_p']] = features.apply(lambda row: self.search(row, positive=True), axis=1, result_type='expand')
@@ -259,12 +286,12 @@ class Experiment_Data:
         features[['negative_s_0','negative_s_1','negative_s_2','negative_s_3']] = features.apply(lambda row:pd.Series(row['negative_s_']), axis=1)
         
         # expand dimensions for s and p
-        target[['s0','s1','s2','s3']] = features.apply(lambda row:pd.Series(row['s__']), axis=1)
-        target[['p0','p1']] = features.apply(lambda row:pd.Series(row['p']), axis=1)
+        target[['s0','s1','s2','s3']] = target.apply(lambda row:pd.Series(row['s__']), axis=1)
+        target[['p0','p1']] = target.apply(lambda row:pd.Series(row['p']), axis=1)
         target[['positive_p0','positive_p1']] = features.apply(lambda row:pd.Series(row['positive_p']), axis=1)
         target[['negative_p0','negative_p1']] = features.apply(lambda row:pd.Series(row['negative_p']), axis=1)
 
-        self.features = features
+        self.features = features.drop('p', axis=1)
         self.target = target
         return (
             torch.tensor(self.features[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_', 
@@ -273,11 +300,6 @@ class Experiment_Data:
                                    ]].values), 
             torch.tensor(self.target[['s0','s1','s2','s3', 'r', 'p0','p1', 'positive_p0','positive_p1', 'negative_p0','negative_p1']].values)
         )
-
-    def generate_episodes(self, n_episodes:int = 100, env:Any = None) -> pd.DataFrame:
-        data:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
-        self.raw_data = pd.concat(data)
-        return self.raw_data
 
     def __add__(self, val):
         self.raw_data = pd.concat([self.raw_data, val.raw_data])
