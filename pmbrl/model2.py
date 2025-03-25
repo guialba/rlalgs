@@ -90,7 +90,7 @@ class Model():
                 transition_optimizer_clss=optim.Adam,
                 reward_learning_rate:float=0.001,
                 reward_estimator_clss=Reward_Estimator_Base,
-                reward_criterion_clss=nn.BCELoss,
+                reward_criterion_clss=nn.MSELoss, #nn.BCELoss,
                 reward_optimizer_clss=optim.Adam
             ) -> None:
         ## Transition Estimator Set Up
@@ -121,14 +121,16 @@ class Model():
                 s_negative = X[:,Experiment_Data.features_slices['negative_s']],
                 _s_negative = X[:,Experiment_Data.features_slices['negative_s_']],
             )
-            transition_loss.backward()
+            self.transition_optimizer.zero_grad()
+            transition_loss.backward(retain_graph=True)
+            # transition_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.transition_estimator.parameters(), max_norm=1.0) 
             self.transition_optimizer.step()  
 
             # Transition
             self.reward_optimizer.zero_grad()
-            reward_outputs = self.reward_estimator(transition_outputs[0])
-            reward_loss = self.reward_criterion(reward_outputs.squeeze(), y[:,Experiment_Data.targets_slices['r']])
+            reward_outputs = self.reward_estimator(transition_outputs[0].detach())
+            reward_loss = self.reward_criterion(reward_outputs, y[:,Experiment_Data.targets_slices['r']])
             reward_loss.backward()
             self.reward_optimizer.step()  
             

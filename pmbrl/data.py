@@ -293,12 +293,15 @@ class Experiment_Data:
 
         self.features = features.drop('p', axis=1)
         self.target = target
-        return (
-            torch.tensor(self.features[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_', 
+
+        np_features = np.array(self.features[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_', 
                                    'positive_s0','positive_s1','positive_s2','positive_s3', 'positive_a', 'positive_s_0','positive_s_1','positive_s_2','positive_s_3',
                                    'negative_s0','negative_s1','negative_s2','negative_s3', 'negative_a', 'negative_s_0','negative_s_1','negative_s_2','negative_s_3'
-                                   ]].values), 
-            torch.tensor(self.target[['s0','s1','s2','s3', 'r', 'p0','p1', 'positive_p0','positive_p1', 'negative_p0','negative_p1']].values)
+                                   ]].values, dtype = np.float32)
+        np_targets = np.array(self.target[['s0','s1','s2','s3', 'r', 'p0','p1', 'positive_p0','positive_p1', 'negative_p0','negative_p1']].values, dtype = np.float32)
+        return (
+            torch.tensor(np_features), 
+            torch.tensor(np_targets)
         )
 
     def __add__(self, val):
