@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Iterator
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,6 +6,10 @@ import torch.optim as optim
 import gymnasium as gym
 import rlenvs
 import pandas as pd
+import matplotlib.axes as axes
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import random
 
 
 default_params = {
@@ -225,6 +229,13 @@ class Experiment_Data:
         'negative_p': slice(9,11,1),
     }
 
+    def get_raw_data_expanded(self) -> pd.DataFrame:
+        raw_data = self.raw_data.copy()
+        raw_data[['s0','s1','s2','s3']] = raw_data.apply(lambda row:pd.Series(row['s']), axis=1)
+        raw_data[['s_0','s_1','s_2','s_3']] = raw_data.apply(lambda row:pd.Series(row['s_']), axis=1)
+        raw_data[['p_0','p_1']] = raw_data.apply(lambda row:pd.Series(row['p']), axis=1)
+        
+        return raw_data[['episode', 'step', 's0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'r', 'p_0','p_1']]
 
     def load(self, path:str) -> None:
         assert self.raw_data != None, "No data to export"
@@ -244,7 +255,7 @@ class Experiment_Data:
 
     def build_training_dataset(self, data:pd.DataFrame=None, randomize=True) -> pd.DataFrame:
         if data is None:
-            data = self.raw_data
+            data = self.raw_data.copy()
         next_steps = data.groupby('episode')[['s','a','r','s_']].shift(-1)
         data[['s_','a_','r_','s__']] = next_steps
         self.training_dataset = data[['step', 'episode', 'p',  's', 'a', 'r', 's_', 'a_', 'r_', 's__']].dropna().reset_index(drop=True)
@@ -304,6 +315,21 @@ class Experiment_Data:
             torch.tensor(np_targets)
         )
 
+    def get_training_data(self, trainer:Iterator) -> pd.DataFrame:
+        train_loss, train_data  = zip(*[(
+            (epoch, transition_loss.tolist(), reward_loss.tolist()), 
+            # (epoch,*zip(transition_etimates[0].tolist(), transition_etimates[1].tolist(), reward_etimates.tolist()))
+            (epoch, transition_etimates[0].tolist(), transition_etimates[1].tolist(), reward_etimates.tolist())
+            ) 
+            for epoch, (transition_etimates, transition_loss, reward_etimates, reward_loss) in enumerate(trainer)
+        ])
+        
+        train_loss = pd.DataFrame(train_loss, columns=['epoch', 'transition', 'reward'])
+        train_data = pd.DataFrame(train_data, columns=['epoch', 's', 'p', 'r']).explode(['s','p','r'])
+        self.training_results = train_loss
+        self.training_data = train_data
+        return self.training_results
+
     def __add__(self, val):
         self.raw_data = pd.concat([self.raw_data, val.raw_data])
         return self
@@ -333,4 +359,42 @@ class Experiment_Data:
         env.close()
         return pd.DataFrame.from_dict(data)
 
+    def plot_episodes_progression(self, axs:axes.Axes) -> axes.Axes:
+        random.seed(100)
+
+        df = self.get_raw_data_expanded()
+
+        actions = ['<','>']
+        actions_colors = ['white','black']
+
+        axs.set_title('Episodes Progression')
+        axs.set_xlabel('pole_angle')
+        axs.set_ylabel('angular_velocity')
+
+        colors = random.choices(list(mcolors.CSS4_COLORS.values()), k=len(df.episode.unique()))
+        for epi in df.episode.unique():
+            axs.plot(df[df.episode == epi].s_2, df[df.episode == epi].s_3, color=colors[epi])
+            axs.plot(df[df.episode == epi].s2.values[:2], df[df.episode == epi].s3.values[:2], color=colors[epi], label=f'episode {epi}')
+            axs.plot(df[df.episode == epi].s2.values[:1], df[df.episode == epi].s3.values[:1], color=colors[epi], 
+                    marker=actions[df[df.episode == epi].a.values[0]],
+                    markerfacecolor=actions_colors[df[df.episode == epi].a.values[0]]
+            )
+            for step in df[df.episode == epi].step.unique():
+                axs.plot(
+                    df[(df.episode == epi) & (df.step == step)].s_2.values[0], 
+                    df[(df.episode == epi) & (df.step == step)].s_3.values[0], 
+                    color=colors[epi], 
+                    marker=actions[df[(df.episode == epi) & (df.step == step)].a.values[0]], 
+                    markerfacecolor=actions_colors[df[(df.episode == epi) & (df.step == step)].a.values[0]])
+            axs.legend()
+
+        return axs
     
+    def plot_training_loss(self, axs:axes.Axes, data:pd.Series=None, color:str='g') -> axes.Axes:
+        if data is None:
+            data = self.training_results.transition
+        axs.set_title(f'Training Progression ({data.name})')
+        axs.set_xlabel('Epoch')
+        axs.set_ylabel('Loss')
+        axs.plot(data, color=color)
+        return axs
