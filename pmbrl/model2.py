@@ -142,7 +142,7 @@ class Model():
     def sample(self, x:torch.Tensor):
         with torch.no_grad():
             s = self.transition_estimator(x)
-            r = self.reward_estimator(s)
+            r = self.reward_estimator(s[0])
         return s,r
 
 

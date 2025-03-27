@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import random
 
-
 default_params = {
     'gravity': 9.8,
     'masscart': 1.0,
@@ -229,13 +228,28 @@ class Experiment_Data:
         'negative_p': slice(9,11,1),
     }
 
-    def get_raw_data_expanded(self) -> pd.DataFrame:
-        raw_data = self.raw_data.copy()
-        raw_data[['s0','s1','s2','s3']] = raw_data.apply(lambda row:pd.Series(row['s']), axis=1)
-        raw_data[['s_0','s_1','s_2','s_3']] = raw_data.apply(lambda row:pd.Series(row['s_']), axis=1)
-        raw_data[['p_0','p_1']] = raw_data.apply(lambda row:pd.Series(row['p']), axis=1)
+    def get_data_expanded(self, data:pd.DataFrame, cols:dict[str,list[str]]) -> pd.DataFrame:
+        data_copy = data.copy()
+        for col, into in cols.items():
+            data_copy[into] = data_copy.apply(lambda row:pd.Series(row[col]), axis=1)
+        return data_copy
+
+
+    # def get_training_data_expanded(self) -> pd.DataFrame:
+    #     training_data = self.training_data.copy()
+    #     training_data[['s0','s1','s2','s3']] = training_data.apply(lambda row:pd.Series(row['s']), axis=1)
+    #     training_data[['p_0','p_1']] = training_data.apply(lambda row:pd.Series(row['p']), axis=1)
+    #     training_data[['r']] = training_data.apply(lambda row:pd.Series(row['r']), axis=1)
         
-        return raw_data[['episode', 'step', 's0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'r', 'p_0','p_1']]
+    #     return training_data[['epoch', 's0','s1','s2','s3', 'r', 'p_0','p_1']]
+
+    # def get_raw_data_expanded(self) -> pd.DataFrame:
+    #     raw_data = self.raw_data.copy()
+    #     raw_data[['s0','s1','s2','s3']] = raw_data.apply(lambda row:pd.Series(row['s']), axis=1)
+    #     raw_data[['s_0','s_1','s_2','s_3']] = raw_data.apply(lambda row:pd.Series(row['s_']), axis=1)
+    #     raw_data[['p_0','p_1']] = raw_data.apply(lambda row:pd.Series(row['p']), axis=1)
+        
+    #     return raw_data[['episode', 'step', 's0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'r', 'p_0','p_1']]
 
     def load(self, path:str) -> None:
         assert self.raw_data != None, "No data to export"
@@ -253,67 +267,103 @@ class Experiment_Data:
         self.raw_data = pd.concat(data)
         return self.raw_data
 
+    def _build_inference_dataset(self, data:pd.DataFrame) -> pd.DataFrame:
+        next_steps = data.groupby('episode')[['s','a','r','s_']].shift(-1)
+        data[['s_','a_','r_','s__']] = next_steps
+        return data[['step', 'episode', 'p',  's', 'a', 'r', 's_', 'a_', 'r_', 's__']].dropna().reset_index(drop=True)
+
     def build_training_dataset(self, data:pd.DataFrame=None, randomize=True) -> pd.DataFrame:
         if data is None:
             data = self.raw_data.copy()
-        next_steps = data.groupby('episode')[['s','a','r','s_']].shift(-1)
-        data[['s_','a_','r_','s__']] = next_steps
-        self.training_dataset = data[['step', 'episode', 'p',  's', 'a', 'r', 's_', 'a_', 'r_', 's__']].dropna().reset_index(drop=True)
+        else:
+            data = data.copy()
+
+        self.training_dataset = self._build_inference_dataset(data)
         
         n = self.training_dataset.shape[0]
         index = np.random.choice(n, n, replace=False) if randomize else np.arange(n)
         self.training_dataset = self.training_dataset.iloc[index]
         return self.training_dataset
     
-    def search(self, anchor:pd.Series, positive=True) -> pd.Series:
-        # Logic to match refferences 
-        if positive == True:
-            distance = (self.training_dataset['p'] == anchor['p']) & (self.training_dataset['a'] == anchor['a'])
-        else:
-            distance = (self.training_dataset['p'] != anchor['p']) & (self.training_dataset['a'] == anchor['a'])
-        ##
-        filtered = self.training_dataset[distance].reset_index(drop=True)
-        index = np.random.choice(filtered.shape[0], 1, replace=False)  
-        reff = filtered.loc[index]
-        return pd.Series(reff[['s','a','s_', 'p']].values[0], index=['s','a','s_','p'])
+    def search(self, anchor:pd.Series) -> np.array:
+        df = self.training_dataset[self.training_dataset['a'] == anchor['a']]#.reset_index(drop=True)
+        df = self.get_data_expanded(df,
+            {
+                'p':['p0','p1'],
+                's':['s0','s1','s2','s3'],
+                's_':['s_0','s_1','s_2','s_3'],
+            }
+        )
+        # distance
+        df['p_distance'] = np.sqrt(np.pow(df.p0 - tuple(anchor['p'])[0],2)) + np.sqrt(np.pow(df.p1 - tuple(anchor['p'])[1],2))
 
-    def get_features_targets(self, data:pd.DataFrame=None) -> torch.Tensor:
-        if data is None:
-            data = self.training_dataset.copy()
+        # get references
+        negative_filtered = df[df['p_distance'] > df.p_distance.min()].reset_index(drop=True)
+        positive_index = df.p_distance.idxmin()
+        negative_index = np.random.randint(negative_filtered.shape[0])  
+        positive_reff = df.loc[positive_index]
+        negative_reff = negative_filtered.loc[negative_index]
 
+        return np.concat([positive_reff[['s','a','s_', 'p']].values, negative_reff[['s','a','s_', 'p']].values])
+
+
+    def _break_features_targets(self, data:pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         features = data[['s', 'a', 's_', 'a_', 'p']].copy()
         target = data[['s__', 'r', 'p']].copy()
 
         # get refferences 
-        features[['positive_s','positive_a','positive_s_','positive_p']] = features.apply(lambda row: self.search(row, positive=True), axis=1, result_type='expand')
-        features[['negative_s','negative_a','negative_s_','negative_p']] = features.apply(lambda row: self.search(row, positive=False), axis=1, result_type='expand')
-        
-        # expand dimensions for s's
-        features[['s0','s1','s2','s3']] = features.apply(lambda row:pd.Series(row['s']), axis=1)
-        features[['s_0','s_1','s_2','s_3']] = features.apply(lambda row:pd.Series(row['s_']), axis=1)
-        features[['positive_s0','positive_s1','positive_s2','positive_s3']] = features.apply(lambda row:pd.Series(row['positive_s']), axis=1)
-        features[['positive_s_0','positive_s_1','positive_s_2','positive_s_3']] = features.apply(lambda row:pd.Series(row['positive_s_']), axis=1)
-        features[['negative_s0','negative_s1','negative_s2','negative_s3']] = features.apply(lambda row:pd.Series(row['negative_s']), axis=1)
-        features[['negative_s_0','negative_s_1','negative_s_2','negative_s_3']] = features.apply(lambda row:pd.Series(row['negative_s_']), axis=1)
-        
-        # expand dimensions for s and p
-        target[['s0','s1','s2','s3']] = target.apply(lambda row:pd.Series(row['s__']), axis=1)
-        target[['p0','p1']] = target.apply(lambda row:pd.Series(row['p']), axis=1)
-        target[['positive_p0','positive_p1']] = features.apply(lambda row:pd.Series(row['positive_p']), axis=1)
-        target[['negative_p0','negative_p1']] = features.apply(lambda row:pd.Series(row['negative_p']), axis=1)
+        features[[
+            'positive_s','positive_a','positive_s_','positive_p',
+            'negative_s','negative_a','negative_s_','negative_p'
+        ]] = features.apply(lambda row: self.search(row), axis=1, result_type='expand')
 
-        self.features = features.drop('p', axis=1)
-        self.target = target
+        features = self.get_data_expanded(features,
+            {
+                's':['s0','s1','s2','s3'],
+                's_':['s_0','s_1','s_2','s_3'],
+                'positive_s':['positive_s0','positive_s1','positive_s2','positive_s3'],
+                'positive_s_':['positive_s_0','positive_s_1','positive_s_2','positive_s_3'],
+                'negative_s':['negative_s0','negative_s1','negative_s2','negative_s3'],
+                'negative_s_':['negative_s_0','negative_s_1','negative_s_2','negative_s_3'],
+                'positive_p':['positive_p0','positive_p1'],
+                'negative_p':['negative_p0','negative_p1']
+            }
+        )
+        target = self.get_data_expanded(target,
+            {
+                's__':['s0','s1','s2','s3'],
+                'p':['p0','p1'],
+            }
+        )
+        target[['positive_p0','positive_p1', 'negative_p0','negative_p1']] = features[['positive_p0','positive_p1', 'negative_p0','negative_p1']]
 
-        np_features = np.array(self.features[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_', 
+        return features, target
+
+    def _extract_features_model(self, features, targets) -> torch.Tensor:
+        np_features = np.array(features[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_', 
                                    'positive_s0','positive_s1','positive_s2','positive_s3', 'positive_a', 'positive_s_0','positive_s_1','positive_s_2','positive_s_3',
                                    'negative_s0','negative_s1','negative_s2','negative_s3', 'negative_a', 'negative_s_0','negative_s_1','negative_s_2','negative_s_3'
                                    ]].values, dtype = np.float32)
-        np_targets = np.array(self.target[['s0','s1','s2','s3', 'r', 'p0','p1', 'positive_p0','positive_p1', 'negative_p0','negative_p1']].values, dtype = np.float32)
+        np_targets = np.array(targets[['s0','s1','s2','s3', 'r', 'p0','p1', 'positive_p0','positive_p1', 'negative_p0','negative_p1']].values, dtype = np.float32)
+        
         return (
             torch.tensor(np_features), 
             torch.tensor(np_targets)
-        )
+        ) 
+
+
+    def get_features_targets(self, data:pd.DataFrame=None) -> torch.Tensor:
+        if data is None:
+            data = self.training_dataset.copy()
+        else:
+            data = data.copy()
+
+        features, targets = self._break_features_targets(data)
+
+        self.features = features.drop('p', axis=1)
+        self.target = targets
+
+        return self._extract_features_model(self.features, self.target)
 
     def get_training_data(self, trainer:Iterator) -> pd.DataFrame:
         train_loss, train_data  = zip(*[(
@@ -328,7 +378,32 @@ class Experiment_Data:
         train_data = pd.DataFrame(train_data, columns=['epoch', 's', 'p', 'r']).explode(['s','p','r'])
         self.training_results = train_loss
         self.training_data = train_data
+
         return self.training_results
+    
+    def evaluate_model(self, model:Any, n_episodes:int=10, env:Any = None) -> pd.DataFrame:
+        d:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
+        d = pd.concat(d)
+        self.evaluation_data = self._build_inference_dataset(d)
+        
+        
+        expanded_data = self.get_data_expanded(self.evaluation_data, {
+                's': ['s0', 's1', 's2', 's3'],
+                's_': ['s_0', 's_1', 's_2', 's_3'],
+                's__': ['s__0', 's__1', 's__2', 's__3'],
+                'p': ['p0', 'p1']
+        })
+        np_features = np.array(expanded_data[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_']].values, dtype = np.float32)
+        np_targets = np.array(expanded_data[['s__0', 's__1', 's__2', 's__3', 'r', 'p0','p1']].values, dtype = np.float32)
+                
+        x, y = (
+            torch.tensor(np_features), 
+            torch.tensor(np_targets)
+        ) 
+
+
+        return model.sample(x), y
+
 
     def __add__(self, val):
         self.raw_data = pd.concat([self.raw_data, val.raw_data])
@@ -362,7 +437,8 @@ class Experiment_Data:
     def plot_episodes_progression(self, axs:axes.Axes) -> axes.Axes:
         random.seed(100)
 
-        df = self.get_raw_data_expanded()
+        # df = self.get_raw_data_expanded()
+        df = self.get_data_expanded(self.raw_data, {'s':['s0','s1','s2','s3'], 's_':['s_0','s_1','s_2','s_3'], 'p':['p_0','p_1']})
 
         actions = ['<','>']
         actions_colors = ['white','black']
@@ -393,8 +469,12 @@ class Experiment_Data:
     def plot_training_loss(self, axs:axes.Axes, data:pd.Series=None, color:str='g') -> axes.Axes:
         if data is None:
             data = self.training_results.transition
+
+        reff = np.zeros(data.shape[0])
+        
         axs.set_title(f'Training Progression ({data.name})')
         axs.set_xlabel('Epoch')
         axs.set_ylabel('Loss')
         axs.plot(data, color=color)
+        axs.plot(reff, linestyle = 'dotted', color=color)
         return axs
