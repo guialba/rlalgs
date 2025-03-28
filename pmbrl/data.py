@@ -381,28 +381,31 @@ class Experiment_Data:
 
         return self.training_results
     
+    def _predict_from_row(self, row:pd.Series, model:Any) -> tuple[list[float], tuple[float], float]:
+            np_features = np.array([row[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_']].values], dtype = np.float32)
+                    
+            x = torch.tensor(np_features)
+            (s, p), r = model.sample(x)
+            return (
+                [round(v, 3) for v in s[0].tolist()], 
+                tuple(round(v, 2) for v in p[0].tolist()),
+                round(r[0].item(), 1)
+            ) 
+
     def evaluate_model(self, model:Any, n_episodes:int=10, env:Any = None) -> pd.DataFrame:
         d:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
         d = pd.concat(d)
         self.evaluation_data = self._build_inference_dataset(d)
-        
-        
+
         expanded_data = self.get_data_expanded(self.evaluation_data, {
                 's': ['s0', 's1', 's2', 's3'],
                 's_': ['s_0', 's_1', 's_2', 's_3'],
                 's__': ['s__0', 's__1', 's__2', 's__3'],
                 'p': ['p0', 'p1']
         })
-        np_features = np.array(expanded_data[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_']].values, dtype = np.float32)
-        np_targets = np.array(expanded_data[['s__0', 's__1', 's__2', 's__3', 'r', 'p0','p1']].values, dtype = np.float32)
-                
-        x, y = (
-            torch.tensor(np_features), 
-            torch.tensor(np_targets)
-        ) 
 
-
-        return model.sample(x), y
+        self.evaluation_data[['estimated_s', 'estimated_p', 'estimated_r']] = expanded_data.apply(lambda row: self._predict_from_row(row, model), axis=1, result_type='expand')
+        return self.evaluation_data
 
 
     def __add__(self, val):
