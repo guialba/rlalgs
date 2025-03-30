@@ -234,23 +234,6 @@ class Experiment_Data:
             data_copy[into] = data_copy.apply(lambda row:pd.Series(row[col]), axis=1)
         return data_copy
 
-
-    # def get_training_data_expanded(self) -> pd.DataFrame:
-    #     training_data = self.training_data.copy()
-    #     training_data[['s0','s1','s2','s3']] = training_data.apply(lambda row:pd.Series(row['s']), axis=1)
-    #     training_data[['p_0','p_1']] = training_data.apply(lambda row:pd.Series(row['p']), axis=1)
-    #     training_data[['r']] = training_data.apply(lambda row:pd.Series(row['r']), axis=1)
-        
-    #     return training_data[['epoch', 's0','s1','s2','s3', 'r', 'p_0','p_1']]
-
-    # def get_raw_data_expanded(self) -> pd.DataFrame:
-    #     raw_data = self.raw_data.copy()
-    #     raw_data[['s0','s1','s2','s3']] = raw_data.apply(lambda row:pd.Series(row['s']), axis=1)
-    #     raw_data[['s_0','s_1','s_2','s_3']] = raw_data.apply(lambda row:pd.Series(row['s_']), axis=1)
-    #     raw_data[['p_0','p_1']] = raw_data.apply(lambda row:pd.Series(row['p']), axis=1)
-        
-    #     return raw_data[['episode', 'step', 's0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'r', 'p_0','p_1']]
-
     def load(self, path:str) -> None:
         assert self.raw_data != None, "No data to export"
         self.path = path
@@ -366,17 +349,18 @@ class Experiment_Data:
         return self._extract_features_model(self.features, self.target)
 
     def get_training_data(self, trainer:Iterator) -> pd.DataFrame:
-        train_loss, train_data  = zip(*[(
+        train_loss, train_loss_terms, train_data  = zip(*[(
             (epoch, transition_loss.tolist(), reward_loss.tolist()), 
-            # (epoch,*zip(transition_etimates[0].tolist(), transition_etimates[1].tolist(), reward_etimates.tolist()))
+            dict({'epoch': epoch}, **transition_loss_terms),
             (epoch, transition_etimates[0].tolist(), transition_etimates[1].tolist(), reward_etimates.tolist())
             ) 
-            for epoch, (transition_etimates, transition_loss, reward_etimates, reward_loss) in enumerate(trainer)
+            for epoch, (transition_etimates, transition_loss, transition_loss_terms, reward_etimates, reward_loss) in enumerate(trainer)
         ])
         
         train_loss = pd.DataFrame(train_loss, columns=['epoch', 'transition', 'reward'])
+        train_loss_terms = pd.DataFrame(train_loss_terms)
         train_data = pd.DataFrame(train_data, columns=['epoch', 's', 'p', 'r']).explode(['s','p','r'])
-        self.training_results = train_loss
+        self.training_results = train_loss.join(train_loss_terms, on='epoch', lsuffix='_caller', rsuffix='_other')[train_loss_terms.columns.to_list()+['transition', 'reward']]
         self.training_data = train_data
 
         return self.training_results
@@ -478,6 +462,39 @@ class Experiment_Data:
         axs.set_title(f'Training Progression ({data.name})')
         axs.set_xlabel('Epoch')
         axs.set_ylabel('Loss')
-        axs.plot(data, color=color)
+        axs.plot(data, color=color, label={data.name})
         axs.plot(reff, linestyle = 'dotted', color=color)
+        return axs
+        
+    def plot_value_through_episodes(self, axs:axes.Axes, data:pd.DataFrame, col:str) -> axes.Axes:
+        episodes = data.reset_index().groupby('episode').index.min().values
+        # tickers = np.arange(4)
+        values = data[col].values
+        n = data.shape[0]
+
+        axs.set_title(col)
+        axs.set_ylabel('Rooted Squared Error')
+        axs.set_xlabel('step')
+
+        axs.plot(values, color = 'r')
+        
+        # Zero Line
+        axs.plot(np.zeros(n), linestyle = 'dotted', color = 'g')
+        for i, epi in enumerate(episodes):
+            # Avg Reference
+            epi_values = data[data.episode==i][col].values
+            epi_n = len(epi_values)
+            axs.text(epi_n//2+epi, np.mean(epi_values), f'{round(np.mean(epi_values),1)}', color='r', alpha=.4) # adjust y position as needed
+            axs.plot(np.arange(epi_n)+epi, np.ones(epi_n)*np.mean(epi_values), linestyle = 'dotted', color = 'r', alpha=.2)
+            
+            # Episode References
+            axs.axvline(x=epi, color='y', linestyle='--', linewidth=1, alpha=.4)
+            axs.text(epi+.2, np.mean(values), f'{i}', color='y', alpha=.8) # adjust y position as needed
+        axs.text(-3, np.mean(values), 'Episode', rotation=90, verticalalignment='center', color='y', alpha=.5) # adjust y position as needed
+        # axs.set_yticks(tickers)
+
+        # Avg Reference
+        # axs.text(n-1, np.mean(values), f'{round(np.mean(values),1)}', color='r') # adjust y position as needed
+        # axs.plot(np.ones(n)*np.mean(values), linestyle = 'dotted', color = 'r')
+
         return axs

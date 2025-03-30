@@ -14,19 +14,25 @@ class Regularized_Reference_Loss(nn.MSELoss):
                 gamma=1,
                 lambda_=0.001, 
                 *args, **kargs
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         mse_s_ = super().forward(s, y)
         mse_positive = super().forward(p, positive)
         mse_negative = super().forward(p, negative)
+        regularize = torch.mean(torch.pow(p, 2) + torch.pow(positive, 2) + torch.pow(negative, 2))
 
-        loss = torch.mean(alpha*mse_positive + beta*(1-mse_negative) + gamma*mse_s_ + lambda_*(torch.pow(p, 2) + torch.pow(positive, 2) + torch.pow(negative, 2)))
-        return loss.float()
+        loss = alpha*mse_positive + beta*(-mse_negative) + gamma*mse_s_ + lambda_*regularize
+        return (
+            loss.float(),
+            {
+                'mse_positive': mse_positive.item(), 'inverse_mse_negative': -mse_negative.item(), 'mse_s': mse_s_.item(), 'regularize': regularize.item(),
+            }
+        )
 
 class Relative_Reference_Loss(nn.MSELoss):
     def forward(self, s:torch.Tensor, y:torch.Tensor, p:torch.Tensor, positive:torch.Tensor, negative:torch.Tensor,
                 _s:torch.Tensor, s_positive:torch.Tensor, s_negative:torch.Tensor, _s_negative:torch.Tensor,
                 *args, **kargs
-    ):
+    )-> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         mse_s = super().forward(s, y)
         mse_positive = super().forward(p, positive)
         mse_negative = super().forward(p, negative)
@@ -35,14 +41,20 @@ class Relative_Reference_Loss(nn.MSELoss):
         mse_s_negative_ = super().forward(_s, _s_negative)
 
         loss = torch.mean(mse_s + mse_positive + (-mse_negative/(mse_s_negative-mse_s_negative_)))
-        return loss.float()
+        return (
+            loss.float(),
+            {'mse_positive': mse_positive.item(), 'inverse_mse_negative': -mse_negative.item(), 'difference_mse_negative_step': (mse_s_negative-mse_s_negative_).item(), 'mse_s': mse_s.item()}
+        )
     
 class Triplet_Loss(nn.MSELoss):
-    def forward(self, s:torch.Tensor, y:torch.Tensor, p:torch.Tensor, positive:torch.Tensor, negative:torch.Tensor, *args, **kargs):
+    def forward(self, s:torch.Tensor, y:torch.Tensor, p:torch.Tensor, positive:torch.Tensor, negative:torch.Tensor, *args, **kargs)-> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         mse_s = super().forward(s, y)
         triplet = torch.nn.functional.triplet_margin_loss(p, positive, negative)
         loss = triplet + mse_s
-        return loss.float()
+        return (
+            loss.float(),
+            {'triplet': triplet.item(), 'mse_s': mse_s.item()}
+        )
 
 ## Estimators
 class Reward_Estimator_Base(nn.Sequential):
@@ -110,7 +122,7 @@ class Model():
             # Transition
             self.transition_optimizer.zero_grad()
             transition_outputs = self.transition_estimator(X[:,Experiment_Data.features_slices['model_ready']])
-            transition_loss = self.transition_criterion(
+            transition_loss, loss_components = self.transition_criterion(
                 s = transition_outputs[0], 
                 y = y[:,Experiment_Data.targets_slices['s']],
                 p = transition_outputs[1],
@@ -135,7 +147,7 @@ class Model():
             self.reward_optimizer.step()  
             
             yield (
-                transition_outputs, transition_loss,
+                transition_outputs, transition_loss, loss_components,
                 reward_outputs, reward_loss
             )
 
