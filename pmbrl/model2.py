@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as f
 import torch.optim as optim
 
 from pmbrl.data import Experiment_Data 
@@ -15,16 +16,20 @@ class Regularized_Reference_Loss(nn.MSELoss):
                 lambda_=0.001, 
                 *args, **kargs
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        mse_s_ = super().forward(s, y)
-        mse_positive = super().forward(p, positive)
-        mse_negative = super().forward(p, negative)
+        mse_s_ = torch.mean(f.mse_loss(s,y, reduction='none'), axis=0)
+        mse_positive = torch.mean(f.mse_loss(p,positive, reduction='none'), axis=0)
+        mse_negative = torch.mean(f.mse_loss(p,negative, reduction='none'), axis=0)
+        
+        # mse_s_ = super().forward(s, y)
+        # mse_positive = super().forward(p, positive)
+        # mse_negative = super().forward(p, negative)
         regularize = torch.mean(torch.pow(p, 2) + torch.pow(positive, 2) + torch.pow(negative, 2))
 
-        loss = alpha*mse_positive + beta*(-mse_negative) + gamma*mse_s_ + lambda_*regularize
+        loss = alpha*mse_positive.sum() + beta*(-mse_negative.sum()) + gamma*mse_s_.sum() + lambda_*regularize
         return (
             loss.float(),
             {
-                'mse_positive': mse_positive.item(), 'inverse_mse_negative': -mse_negative.item(), 'mse_s': mse_s_.item(), 'regularize': regularize.item(),
+                'mse_positive': mse_positive.tolist(), 'mse_negative': mse_negative.tolist(), 'mse_s': mse_s_.tolist(), 'regularize': regularize.item(),
             }
         )
 
@@ -117,7 +122,7 @@ class Model():
         self.reward_criterion = reward_criterion_clss()
         self.reward_optimizer = reward_optimizer_clss(self.reward_estimator.parameters(), lr=reward_learning_rate)
 
-    def train(self, X:torch.Tensor, y:torch.Tensor, num_epochs:int=100):
+    def train(self, X:torch.Tensor, y:torch.Tensor, num_epochs:int=100, **kargs):
         for _ in range(num_epochs):
             # Transition
             self.transition_optimizer.zero_grad()
@@ -132,6 +137,7 @@ class Model():
                 s_positive = X[:,Experiment_Data.features_slices['positive_s']],
                 s_negative = X[:,Experiment_Data.features_slices['negative_s']],
                 _s_negative = X[:,Experiment_Data.features_slices['negative_s_']],
+                **kargs
             )
             self.transition_optimizer.zero_grad()
             transition_loss.backward(retain_graph=True)

@@ -453,6 +453,54 @@ class Experiment_Data:
 
         return axs
     
+    def plot_episode_progression_with_predictions(self, axs:axes.Axes, episode:int=0) -> axes.Axes:
+        # df = self.get_raw_data_expanded()
+        df = self.get_data_expanded(self.evaluation_data[self.evaluation_data.episode==episode], {
+            's_':['s0','s1','s2','s3'], 's__':['s_0','s_1','s_2','s_3'], 'p':['p_0','p_1'],
+            'estimated_s':['estimated_s0','estimated_s1','estimated_s2','estimated_s3'], 'estimated_p':['estimated_p_0','estimated_p_1']
+        })
+
+        actions = ['<','>']
+        actions_colors = ['white','black']
+
+        axs.set_title(f'Episodes Progression P({df[df.episode == episode].p.values[0]})')
+        axs.set_xlabel('pole_angle')
+        axs.set_ylabel('angular_velocity')
+
+
+        for epi in df.episode.unique():
+            # axs.text(0, 0, f'p({df[df.episode == epi].p.values[0]})', color='r')
+            for step in df[df.episode==epi].step.unique():
+                x, y = (
+                    pd.concat([df[(df.episode == epi) & (df.step == step)].s2, df[(df.episode == epi) & (df.step == step)].s_2]),
+                    pd.concat([df[(df.episode == epi) & (df.step == step)].s3, df[(df.episode == epi) & (df.step == step)].s_3])
+                )
+                x_,y_ = (
+                    pd.concat([df[(df.episode == epi) & (df.step == step)].s2, df[(df.episode == epi) & (df.step == step)].estimated_s2]),
+                    pd.concat([df[(df.episode == epi) & (df.step == step)].s3, df[(df.episode == epi) & (df.step == step)].estimated_s3])
+                )
+                xErr,yErr = (
+                    np.array([x.iloc[1], x_.iloc[1]]),
+                    np.array([y.iloc[1], y_.iloc[1]])
+                )
+                axs.plot(x, y, color='b') # Real Step
+                axs.plot(x_, y_, color='g', linestyle='dotted') # Estimated Step
+                axs.plot(xErr, yErr, color='r', linestyle='dotted') # Estimated Step
+            axs.plot(df[df.episode == epi].s2.values[:2], df[df.episode == epi].s3.values[:2], color='b', label=f'episode {epi}') # Initial Step END
+            axs.plot(df[df.episode == epi].s2.values[:1], df[df.episode == epi].s3.values[:1], color='b',  # Initial Step BEGIN
+                    marker=actions[df[df.episode == epi].a.values[0]],
+                    markerfacecolor=actions_colors[df[df.episode == epi].a.values[0]]
+            )
+            for step in df[df.episode == epi].step.unique():
+                axs.plot( # Actions
+                    df[(df.episode == epi) & (df.step == step)].s_2.values[0], 
+                    df[(df.episode == epi) & (df.step == step)].s_3.values[0], 
+                    color='b', 
+                    marker=actions[df[(df.episode == epi) & (df.step == step)].a.values[0]], 
+                    markerfacecolor=actions_colors[df[(df.episode == epi) & (df.step == step)].a.values[0]])
+        axs.legend()
+        return axs
+
     def plot_training_loss(self, axs:axes.Axes, data:pd.Series=None, color:str='g') -> axes.Axes:
         if data is None:
             data = self.training_results.transition
@@ -467,10 +515,30 @@ class Experiment_Data:
         return axs
         
     def plot_value_through_episodes(self, axs:axes.Axes, data:pd.DataFrame, col:str) -> axes.Axes:
-        episodes = data.reset_index().groupby('episode').index.min().values
+        expansions = {
+            's__': ['s0', 's1', 's2', 's3'],
+            'estimated_s': ['estimated_s0', 'estimated_s1', 'estimated_s2', 'estimated_s3'],
+            'p': ['p0', 'p1'],
+            'estimated_p': ['estimated_p0', 'estimated_p1'],
+        }
+
+        results = self.get_data_expanded(data, expansions)
+
+        def rse(v1:pd.Series, v2:pd.Series) -> pd.Series:
+            return np.sqrt(np.pow(v1-v2, 2))
+
+        # RMSE for state
+        for v1, v2 in zip(expansions['s__'], expansions['estimated_s']):
+            results[f'rse_{v1}'] = rse(results[v1], results[v2])
+
+        results[f'rse_r'] = rse(results.r, results.estimated_r)
+
+
+
+        episodes = results.reset_index().groupby('episode').index.min().values
         # tickers = np.arange(4)
-        values = data[col].values
-        n = data.shape[0]
+        values = results[col].values
+        n = results.shape[0]
 
         axs.set_title(col)
         axs.set_ylabel('Rooted Squared Error')
@@ -482,7 +550,7 @@ class Experiment_Data:
         axs.plot(np.zeros(n), linestyle = 'dotted', color = 'g')
         for i, epi in enumerate(episodes):
             # Avg Reference
-            epi_values = data[data.episode==i][col].values
+            epi_values = results[results.episode==i][col].values
             epi_n = len(epi_values)
             axs.text(epi_n//2+epi, np.mean(epi_values), f'{round(np.mean(epi_values),1)}', color='r', alpha=.4) # adjust y position as needed
             axs.plot(np.arange(epi_n)+epi, np.ones(epi_n)*np.mean(epi_values), linestyle = 'dotted', color = 'r', alpha=.2)
@@ -498,3 +566,5 @@ class Experiment_Data:
         # axs.plot(np.ones(n)*np.mean(values), linestyle = 'dotted', color = 'r')
 
         return axs
+
+    
