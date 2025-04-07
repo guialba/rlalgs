@@ -213,6 +213,12 @@ def get_data_expanded(data:pd.DataFrame, cols:dict[str,list[str]]) -> pd.DataFra
         for col, into in cols.items():
             data_copy[into] = data_copy.apply(lambda row:pd.Series(row[col]), axis=1)
         return data_copy
+def get_data_compacted(data:pd.DataFrame, cols:dict[str,list[str]]) -> pd.DataFrame:
+        data_copy = data.copy()
+        for col, into in cols.items():
+            data_copy[col] = list(zip(*[data_copy[c] for c in into]))
+        return data_copy
+
 
 class Experiment_Data:
     features_slices = {
@@ -236,22 +242,19 @@ class Experiment_Data:
         'negative_p': slice(9,11,1),
     }
 
-    def get_data_expanded(self, data:pd.DataFrame, cols:dict[str,list[str]]) -> pd.DataFrame:
-        data_copy = data.copy()
-        for col, into in cols.items():
-            data_copy[into] = data_copy.apply(lambda row:pd.Series(row[col]), axis=1)
-        return data_copy
-
     def load(self, path:str) -> None:
-        assert self.raw_data != None, "No data to export"
         self.path = path
-        self.raw_data = pd.read_csv(path)
+        data = pd.read_csv(path)
+        raw_data = get_data_compacted(data, {'p': ['p0','p1'], 's': ['s0','s1','s2','s3'], 's_': ['s_0','s_1','s_2','s_3']})
+        self.raw_data = raw_data[['episode', 'step','s','a','r','s_','p']]
         return self.raw_data
 
     def save(self, path:str) -> None:
-        assert self.raw_data != None, "No data to export"
+        assert self.raw_data is not None, "No data to export"
+        data = get_data_expanded(self.raw_data, {'p': ['p0','p1'], 's': ['s0','s1','s2','s3'], 's_': ['s_0','s_1','s_2','s_3']})
+
         self.path = path
-        self.raw_data.to_csv(path)
+        data[['episode', 'step','s0','s1','s2','s3','a','r','s_0','s_1','s_2','s_3','p0','p1']].to_csv(path, index=False)
 
     def generate_episodes(self, n_episodes:int = 100, env:Any = None) -> pd.DataFrame:
         data:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
@@ -276,15 +279,13 @@ class Experiment_Data:
         self.training_dataset = self.training_dataset.iloc[index]
         return self.training_dataset
     
-    def get_training_data(self, trainer:Iterator, base_line:bool=False) -> pd.DataFrame:
-        if not base_line:
-            colums = ['s', 'p', 'r']
-        else:
-            colums = ['s', 'r']
+    def get_training_data(self, trainer:Iterator, inference_schema={'transition': ['s', 'p'], 'reward': ['r']}) -> pd.DataFrame:
+        colums = inference_schema['transition'] + inference_schema['reward']
         train_loss, train_loss_terms, train_data  = zip(*[(
             (epoch, transition_loss.tolist(), reward_loss.tolist()), 
             dict({'epoch': epoch}, **transition_loss_terms),
-            ((epoch, transition_etimates[0].tolist(), transition_etimates[1].tolist(), reward_etimates.tolist()) if not base_line else (epoch, transition_etimates.tolist(), reward_etimates.tolist()))
+            # ((epoch, transition_etimates[0].tolist(), transition_etimates[1].tolist(), reward_etimates.tolist()) if not base_line else (epoch, transition_etimates.tolist(), reward_etimates.tolist()))
+            ((epoch, *[v.tolist() for v in transition_etimates], reward_etimates.tolist()))
             ) 
             for epoch, (transition_etimates, transition_loss, transition_loss_terms, reward_etimates, reward_loss) in enumerate(trainer)
         ])
@@ -297,46 +298,36 @@ class Experiment_Data:
 
         return self.training_results
     
-    def _predict_from_row(self, row:pd.Series, model:Any, base_line:bool=False) -> tuple[list[float], tuple[float], float]:
-            np_features = np.array([row[['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_']].values], dtype = np.float32)
+    def _predict_from_row(self, row:pd.Series, model:Any) -> tuple[list[float], tuple[float], float]:
+            np_features = np.array([row[model.inference_features_lables].values], dtype = np.float32)
                     
             x = torch.tensor(np_features)
-            if not base_line:
-                (s, p), r = model.sample(x)
-                return (
-                    [round(v, 3) for v in s[0].tolist()], 
-                    tuple(round(v, 2) for v in p[0].tolist()),
-                    round(r[0].item(), 1)
-                ) 
-            else:
-                s, r = model.sample(x)
-                return (
-                    [round(v, 3) for v in s[0].tolist()], 
-                    round(r[0].item(), 1)
-                ) 
+            schema = model.inference_schema['transition'] + model.inference_schema['reward']
+            s, r = model.sample(x)
+            return [
+                tuple(round(v, 3) for v in value[0].tolist())
+                for lable, value in zip(model.inference_schema['transition'], s)
+            ] + [ round(r[0].item(), 1) ]
 
-    def evaluate_model(self, model:Any, n_episodes:int=10, env:Any = None, base_line:bool=False) -> pd.DataFrame:
-        d:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
-        d = pd.concat(d)
-        self.evaluation_data = self._build_inference_dataset(d)
+    def evaluate_model(self, model:Any, n_episodes:int=10, env:Any = None, path:str=None) -> pd.DataFrame:
+        if env is not None:
+            d:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
+            data = pd.concat(d)
+        if path is not None:
+            raw_data = pd.read_csv(path)
+            data = get_data_compacted(raw_data, {'p': ['p0','p1'], 's': ['s0','s1','s2','s3'], 's_': ['s_0','s_1','s_2','s_3']})
+            data = data[['episode', 'step','s','a','r','s_','p']]
 
-        if not base_line:
-            expanded_data = get_data_expanded(self.evaluation_data, {
-                    's': ['s0', 's1', 's2', 's3'],
-                    's_': ['s_0', 's_1', 's_2', 's_3'],
-                    's__': ['s__0', 's__1', 's__2', 's__3'],
-                    'p': ['p0', 'p1']
-            })
-            self.evaluation_data[['estimated_s', 'estimated_p', 'estimated_r']] = expanded_data.apply(lambda row: self._predict_from_row(row, model, base_line), axis=1, result_type='expand')
-        
-        else:
-            expanded_data = get_data_expanded(self.evaluation_data, {
-                    's': ['s0', 's1', 's2', 's3'],
-                    's_': ['s_0', 's_1', 's_2', 's_3'],
-                    's__': ['s__0', 's__1', 's__2', 's__3']
-            })
-            self.evaluation_data[['estimated_s', 'estimated_r']] = expanded_data.apply(lambda row: self._predict_from_row(row, model, base_line), axis=1, result_type='expand')
-        
+        self.evaluation_data = self._build_inference_dataset(data)
+
+        expanded_data = get_data_expanded(self.evaluation_data, {
+                's': ['s0', 's1', 's2', 's3'],
+                's_': ['s_0', 's_1', 's_2', 's_3'],
+                's__': ['s__0', 's__1', 's__2', 's__3'],
+                'p': ['p0', 'p1']
+        })
+        self.evaluation_data[model.grouped_targets_lables] = expanded_data.apply(lambda row: self._predict_from_row(row, model), axis=1, result_type='expand')
+
 
         return self.evaluation_data
 
@@ -362,7 +353,7 @@ class Experiment_Data:
         while True:
             a = policy(s)
             s_,r, terminated, truncated, info = env.step(a)
-            data.append({'step':step, 's':s.round(3), 'a':a, 'r':r, 's_':s_.round(3), 'p':options.values()})
+            data.append({'step':step, 's':s.round(3), 'a':a, 'r':r, 's_':s_.round(3), 'p':list(options.values())})
             s = s_
             step += 1
             if terminated or truncated:

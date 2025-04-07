@@ -101,7 +101,95 @@ class Transition_Estimator(nn.Module):
         return out, param
     
 ## Model
+class Base_Line_Simple_Model():
+    inference_schema = {'transition': ['s'], 'reward': ['r']}
+    features_lables = ['s_0','s_1','s_2','s_3', 'a_']
+    inference_features_lables = ['s_0','s_1','s_2','s_3', 'a_']
+    targets_lables = ['s0','s1','s2','s3', 'r']
+
+    grouped_features_lables = ['s', 'a']
+    grouped_targets_lables = ['estimated_s', 'estimated_r']
+
+    def __init__(self,
+                transition_learning_rate:float=0.001,
+                transition_estimator_clss=State_Estimator,
+                transition_criterion_clss=nn.MSELoss,
+                transition_optimizer_clss=optim.Adam,
+                reward_learning_rate:float=0.001,
+                reward_estimator_clss=Reward_Estimator_Base,
+                reward_criterion_clss=nn.MSELoss, #nn.BCELoss,
+                reward_optimizer_clss=optim.Adam
+            ) -> None:
+        ## Transition Estimator Set Up
+        self.transition_estimator = transition_estimator_clss((4+1), 10, 4)
+        self.transition_criterion = transition_criterion_clss(reduction='none')
+        self.transition_optimizer = transition_optimizer_clss(self.transition_estimator.parameters(), lr=transition_learning_rate)
+        ## Reward Estimator Set Up
+        self.reward_estimator = reward_estimator_clss(4,1)
+        self.reward_criterion = reward_criterion_clss()
+        self.reward_optimizer = reward_optimizer_clss(self.reward_estimator.parameters(), lr=reward_learning_rate)
+
+
+    def get_features_targets(self, data:pd.DataFrame)-> tuple[torch.Tensor, torch.Tensor]:
+        data = data.copy()
+        features = data[['s', 'a', 's_', 'a_', 'p']].copy()
+        target = data[['s__', 'r', 'p']].copy()
+        features = get_data_expanded(features, {'s_':['s_0','s_1','s_2','s_3']})
+        target = get_data_expanded(target, {'s__':['s0','s1','s2','s3']})
+        np_features = np.array(features[self.features_lables].values, dtype = np.float32)
+        np_targets = np.array(target[self.targets_lables].values, dtype = np.float32)
+        return (
+            torch.tensor(np_features), 
+            torch.tensor(np_targets)
+        )
+
+
+    def prepare_inference_data(self)-> tuple[torch.Tensor, list[str]]:
+        pass
+
+    def train(self, X:torch.Tensor, y:torch.Tensor, num_epochs:int=100, **kargs):
+        for _ in range(num_epochs):
+            # Transition
+            self.transition_optimizer.zero_grad()
+            transition_outputs = self.transition_estimator(X)
+            # mse_loss = torch.mean(f.mse_loss(transition_outputs, y[:,Experiment_Data.targets_slices['s']], reduction='none'), axis=0)
+            mse_loss = torch.mean(self.transition_criterion(
+                transition_outputs[0], 
+                y[:,Experiment_Data.targets_slices['s']]
+            ), axis=0)
+            transition_loss = mse_loss.sum()
+            transition_loss.backward(retain_graph=True)
+            # transition_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.transition_estimator.parameters(), max_norm=1.0) 
+            self.transition_optimizer.step()  
+
+            # Transition
+            self.reward_optimizer.zero_grad()
+            reward_outputs = self.reward_estimator(transition_outputs.detach())
+            reward_loss = self.reward_criterion(reward_outputs, y[:,Experiment_Data.targets_slices['r']])
+            reward_loss.backward()
+            self.reward_optimizer.step()  
+            
+            yield (
+                (transition_outputs,), transition_loss, {"mse_s": mse_loss.tolist()},
+                reward_outputs, reward_loss
+            )
+
+    def sample(self, x:torch.Tensor):
+        with torch.no_grad():
+            s = self.transition_estimator(x)
+            r = self.reward_estimator(s[0])
+        return (s,),r
+
 class Base_Line_Model():
+    inference_schema = {'transition': ['s'], 'reward': ['r']}
+    features_lables = ['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_']
+    inference_features_lables = ['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_']
+    targets_lables = ['s0','s1','s2','s3', 'r']
+
+    grouped_features_lables = ['s', 'a', 's_', 'a_']
+    grouped_targets_lables = ['estimated_s', 'estimated_r']
+
     def __init__(self,
                 transition_learning_rate:float=0.001,
                 transition_estimator_clss=State_Estimator,
@@ -123,15 +211,13 @@ class Base_Line_Model():
 
 
     def get_features_targets(self, data:pd.DataFrame)-> tuple[torch.Tensor, torch.Tensor]:
-        feature_columns = ['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_']
-        target_columns = ['s0','s1','s2','s3', 'r']
         data = data.copy()
         features = data[['s', 'a', 's_', 'a_', 'p']].copy()
         target = data[['s__', 'r', 'p']].copy()
         features = get_data_expanded(features, {'s':['s0','s1','s2','s3'], 's_':['s_0','s_1','s_2','s_3']})
         target = get_data_expanded(target, {'s__':['s0','s1','s2','s3']})
-        np_features = np.array(features[feature_columns].values, dtype = np.float32)
-        np_targets = np.array(target[target_columns].values, dtype = np.float32)
+        np_features = np.array(features[self.features_lables].values, dtype = np.float32)
+        np_targets = np.array(target[ self.targets_lables].values, dtype = np.float32)
         return (
             torch.tensor(np_features), 
             torch.tensor(np_targets)
@@ -165,7 +251,7 @@ class Base_Line_Model():
             self.reward_optimizer.step()  
             
             yield (
-                transition_outputs, transition_loss, {"mse_s": mse_loss.tolist()},
+                (transition_outputs,), transition_loss, {"mse_s": mse_loss.tolist()},
                 reward_outputs, reward_loss
             )
 
@@ -173,9 +259,21 @@ class Base_Line_Model():
         with torch.no_grad():
             s = self.transition_estimator(x)
             r = self.reward_estimator(s[0])
-        return s,r
+        return (s,),r
 
 class Model():
+    inference_schema = {'transition': ['s', 'p'], 'reward': ['r']}
+    features_lables = [
+            's0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_', 
+            'positive_s0','positive_s1','positive_s2','positive_s3', 'positive_a', 'positive_s_0','positive_s_1','positive_s_2','positive_s_3',
+            'negative_s0','negative_s1','negative_s2','negative_s3', 'negative_a', 'negative_s_0','negative_s_1','negative_s_2','negative_s_3'
+        ]
+    inference_features_lables = ['s0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_']
+    targets_lables = ['s0','s1','s2','s3', 'r', 'p0','p1', 'positive_p0','positive_p1', 'negative_p0','negative_p1']
+
+    grouped_features_lables = ['s', 'a', 's_', 'a_', 'positive_s', 'positive_s_', 'negative_s', 'negative_']
+    grouped_targets_lables = ['estimated_s', 'estimated_p', 'estimated_r']
+
     def __init__(self,
                 transition_learning_rate:float=0.001,
                 transition_estimator_clss=Transition_Estimator,
@@ -222,12 +320,6 @@ class Model():
 
     def get_features_targets(self, data:pd.DataFrame)-> tuple[torch.Tensor, torch.Tensor]:
         self.history = data if self.history is None else pd.concat([self.history, data])
-        feature_columns = [
-            's0','s1','s2','s3', 'a', 's_0','s_1','s_2','s_3', 'a_', 
-            'positive_s0','positive_s1','positive_s2','positive_s3', 'positive_a', 'positive_s_0','positive_s_1','positive_s_2','positive_s_3',
-            'negative_s0','negative_s1','negative_s2','negative_s3', 'negative_a', 'negative_s_0','negative_s_1','negative_s_2','negative_s_3'
-        ]
-        target_columns = ['s0','s1','s2','s3', 'r', 'p0','p1', 'positive_p0','positive_p1', 'negative_p0','negative_p1']
         data = data.copy()
         features = data[['s', 'a', 's_', 'a_', 'p']].copy()
         target = data[['s__', 'r', 'p']].copy()
@@ -251,8 +343,8 @@ class Model():
         target = get_data_expanded(target, {'s__':['s0','s1','s2','s3'], 'p':['p0','p1']})
         target[['positive_p0','positive_p1', 'negative_p0','negative_p1']] = features[['positive_p0','positive_p1', 'negative_p0','negative_p1']]
         features.drop('p', axis=1)
-        np_features = np.array(features[feature_columns].values, dtype = np.float32)
-        np_targets = np.array(target[target_columns].values, dtype = np.float32)
+        np_features = np.array(features[self.features_lables].values, dtype = np.float32)
+        np_targets = np.array(target[self.targets_lables].values, dtype = np.float32)
         return (
             torch.tensor(np_features), 
             torch.tensor(np_targets)
