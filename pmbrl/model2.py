@@ -68,7 +68,7 @@ class Reward_Estimator_Base(nn.Sequential):
     def __init__(self, input_size:int, output_size:int):
         super(Reward_Estimator_Base, self).__init__(
             nn.Linear(input_size, output_size),
-            nn.Sigmoid()
+            # nn.Sigmoid()
         )
 
 class State_Estimator(nn.Sequential):
@@ -154,7 +154,7 @@ class Base_Line_Simple_Model():
             transition_outputs = self.transition_estimator(X)
             # mse_loss = torch.mean(f.mse_loss(transition_outputs, y[:,Experiment_Data.targets_slices['s']], reduction='none'), axis=0)
             mse_loss = torch.mean(self.transition_criterion(
-                transition_outputs[0], 
+                transition_outputs, 
                 y[:,Experiment_Data.targets_slices['s']]
             ), axis=0)
             transition_loss = mse_loss.sum()
@@ -234,7 +234,7 @@ class Base_Line_Model():
             transition_outputs = self.transition_estimator(X[:,Experiment_Data.features_slices['model_ready']])
             # mse_loss = torch.mean(f.mse_loss(transition_outputs, y[:,Experiment_Data.targets_slices['s']], reduction='none'), axis=0)
             mse_loss = torch.mean(self.transition_criterion(
-                transition_outputs[0], 
+                transition_outputs, 
                 y[:,Experiment_Data.targets_slices['s']]
             ), axis=0)
             transition_loss = mse_loss.sum()

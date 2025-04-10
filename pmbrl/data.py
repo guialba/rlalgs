@@ -310,7 +310,7 @@ class Experiment_Data:
             ] + [ round(r[0].item(), 1) ]
 
     def evaluate_model(self, model:Any, n_episodes:int=10, env:Any = None, path:str=None) -> pd.DataFrame:
-        if env is not None:
+        if env is None:
             d:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
             data = pd.concat(d)
         if path is not None:
@@ -454,12 +454,12 @@ class Experiment_Data:
         axs.plot(reff, linestyle = 'dotted', color=color)
         return axs
         
-    def plot_value_through_episodes(self, axs:axes.Axes, data:pd.DataFrame, col:str) -> axes.Axes:
+    def plot_value_through_episodes(self, axs:axes.Axes, data:pd.DataFrame, col:str, color:str='r') -> axes.Axes:
         expansions = {
             's__': ['s0', 's1', 's2', 's3'],
             'estimated_s': ['estimated_s0', 'estimated_s1', 'estimated_s2', 'estimated_s3'],
-            # 'p': ['p0', 'p1'],
-            # 'estimated_p': ['estimated_p0', 'estimated_p1'],
+            'p': ['p0', 'p1'],
+            'estimated_p': ['estimated_p0', 'estimated_p1'],
         }
 
         results = get_data_expanded(data, expansions)
@@ -473,8 +473,6 @@ class Experiment_Data:
 
         results[f'rse_r'] = rse(results.r, results.estimated_r)
 
-
-
         episodes = results.reset_index().groupby('episode').index.min().values
         # tickers = np.arange(4)
         values = results[col].values
@@ -484,7 +482,7 @@ class Experiment_Data:
         axs.set_ylabel('Rooted Squared Error')
         axs.set_xlabel('step')
 
-        axs.plot(values, color = 'r')
+        axs.plot(values, color = color)
         
         # Zero Line
         axs.plot(np.zeros(n), linestyle = 'dotted', color = 'g')
