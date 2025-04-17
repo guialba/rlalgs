@@ -331,6 +331,26 @@ class Experiment_Data:
 
         return self.evaluation_data
 
+    def get_evaluation_metrics(self, data:pd.DataFrame = None) -> pd.DataFrame:
+        data = self.evaluation_data.copy() if data is None else data.copy()
+        expansions = {
+            's__': ['s0', 's1', 's2', 's3'],
+            'estimated_s': ['estimated_s0', 'estimated_s1', 'estimated_s2', 'estimated_s3'],
+            'p': ['p0', 'p1'],
+            'estimated_p': ['estimated_p0', 'estimated_p1'],
+        }
+
+        results = get_data_expanded(data, expansions)
+
+        def rse(v1:pd.Series, v2:pd.Series) -> pd.Series:
+            return np.sqrt(np.pow(v1-v2, 2))
+
+        # RMSE for state
+        for v1, v2 in zip(expansions['s__'], expansions['estimated_s']):
+            results[f'rse_{v1}'] = rse(results[v1], results[v2])
+
+        results[f'rse_r'] = rse(results.r, results.estimated_r)
+        return results
 
     def __add__(self, val):
         self.raw_data = pd.concat([self.raw_data, val.raw_data])
@@ -454,24 +474,10 @@ class Experiment_Data:
         axs.plot(reff, linestyle = 'dotted', color=color)
         return axs
         
-    def plot_value_through_episodes(self, axs:axes.Axes, data:pd.DataFrame, col:str, color:str='r') -> axes.Axes:
-        expansions = {
-            's__': ['s0', 's1', 's2', 's3'],
-            'estimated_s': ['estimated_s0', 'estimated_s1', 'estimated_s2', 'estimated_s3'],
-            'p': ['p0', 'p1'],
-            'estimated_p': ['estimated_p0', 'estimated_p1'],
-        }
-
-        results = get_data_expanded(data, expansions)
-
-        def rse(v1:pd.Series, v2:pd.Series) -> pd.Series:
-            return np.sqrt(np.pow(v1-v2, 2))
-
-        # RMSE for state
-        for v1, v2 in zip(expansions['s__'], expansions['estimated_s']):
-            results[f'rse_{v1}'] = rse(results[v1], results[v2])
-
-        results[f'rse_r'] = rse(results.r, results.estimated_r)
+    def plot_value_through_episodes(self, axs:axes.Axes, data:pd.DataFrame, col:str, 
+                                    color:str='r', y_label:str='Rooted Squared Error'
+        ) -> axes.Axes:
+        results = data.copy()
 
         episodes = results.reset_index().groupby('episode').index.min().values
         # tickers = np.arange(4)
@@ -479,7 +485,7 @@ class Experiment_Data:
         n = results.shape[0]
 
         axs.set_title(col)
-        axs.set_ylabel('Rooted Squared Error')
+        axs.set_ylabel(y_label)
         axs.set_xlabel('step')
 
         axs.plot(values, color = color)
