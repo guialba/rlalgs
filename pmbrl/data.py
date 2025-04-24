@@ -331,14 +331,15 @@ class Experiment_Data:
 
         return self.evaluation_data
 
-    def get_evaluation_metrics(self, data:pd.DataFrame = None) -> pd.DataFrame:
+    def get_evaluation_metrics(self, data:pd.DataFrame = None, p=True) -> pd.DataFrame:
         data = self.evaluation_data.copy() if data is None else data.copy()
         expansions = {
             's__': ['s0', 's1', 's2', 's3'],
-            'estimated_s': ['estimated_s0', 'estimated_s1', 'estimated_s2', 'estimated_s3'],
-            'p': ['p0', 'p1'],
-            'estimated_p': ['estimated_p0', 'estimated_p1'],
+            'estimated_s': ['estimated_s0', 'estimated_s1', 'estimated_s2', 'estimated_s3']
         }
+        if p:
+            expansions['p'] = ['p0', 'p1']
+            expansions['estimated_p'] = ['estimated_p0', 'estimated_p1']
 
         results = get_data_expanded(data, expansions)
 
