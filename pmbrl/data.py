@@ -1,4 +1,5 @@
 from typing import Any, Dict, Iterator
+from sklearn.cluster import KMeans
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ import matplotlib.axes as axes
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import random
+import pickle
 
 default_params = {
     'gravity': 9.8,
@@ -256,8 +258,9 @@ class Experiment_Data:
         self.path = path
         data[['episode', 'step','s0','s1','s2','s3','a','r','s_0','s_1','s_2','s_3','p0','p1']].to_csv(path, index=False)
 
-    def generate_episodes(self, n_episodes:int = 100, env:Any = None) -> pd.DataFrame:
-        data:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i).assign(episode=i) for i in range(n_episodes)]
+    def generate_episodes(self, n_episodes:int = 100, env:Any = None, params:np.array=None) -> pd.DataFrame:
+        params = np.random.gamma([2.,3.], [12., 20.], [n_episodes,2])/100 if params is None else params
+        data:list[pd.DataFrame] = [Experiment_Data.episode(env=env, seed=i, options={'masspole':mp, 'length':l}).assign(episode=i) for i, (mp, l) in enumerate(params)]
         self.raw_data = pd.concat(data)
         return self.raw_data
 
@@ -351,6 +354,14 @@ class Experiment_Data:
             results[f'rse_{v1}'] = rse(results[v1], results[v2])
 
         results[f'rse_r'] = rse(results.r, results.estimated_r)
+        
+        results['rse_s0_normalized'] = (results['rse_s0'] - results['rse_s0'].min()) / (results['rse_s0'].max() - results['rse_s0'].min())
+        results['rse_s1_normalized'] = (results['rse_s1'] - results['rse_s1'].min()) / (results['rse_s1'].max() - results['rse_s1'].min())
+        results['rse_s2_normalized'] = (results['rse_s2'] - results['rse_s2'].min()) / (results['rse_s2'].max() - results['rse_s2'].min())
+        results['rse_s3_normalized'] = (results['rse_s3'] - results['rse_s3'].min()) / (results['rse_s3'].max() - results['rse_s3'].min())
+        results['rse'] = results['rse_s0'] + results['rse_s1'] + results['rse_s2'] + results['rse_s3']
+        results['rse_normalized'] = (results['rse'] - results['rse'].min()) / (results['rse'].max() - results['rse'].min())
+
         return results
 
     def __add__(self, val):
@@ -358,6 +369,7 @@ class Experiment_Data:
         return self
     def __repr__(self):
         return str(self.raw_data.head())
+
 
     @staticmethod
     def episode(env:Any = None, policy:callable = None, options:Dict[str, Any] = None, seed:int = None) -> pd.DataFrame:
@@ -486,7 +498,7 @@ class Experiment_Data:
         n = results.shape[0]
 
         axs.set_title(col)
-        axs.set_ylabel(y_label)
+        axs.set_ylabel(y_label, color=color)
         axs.set_xlabel('step')
 
         axs.plot(values, color = color)
@@ -512,4 +524,31 @@ class Experiment_Data:
 
         return axs
 
-    
+    def plot_clusters(self, axs:list[axes.Axes], df:pd.DataFrame, k:int=5, rgn:int=50, colors:list[str] = ['r', 'b', 'y', 'g', 'gray']) -> list[axes.Axes]:
+        X = df[['p0', 'p1']]
+        kmeans = KMeans(n_clusters=k, random_state=rgn, n_init="auto").fit(X)
+
+        for i, label in enumerate(np.unique(kmeans.labels_)):
+            cluster_points = X[kmeans.labels_ == label]
+            axs[0].scatter(cluster_points['p0'], cluster_points['p1'], color=colors[i], marker='.')
+        axs[0].scatter(kmeans.cluster_centers_[:,0], kmeans.cluster_centers_[:,1], color='black', marker='x')
+
+        for i, label in enumerate(np.unique(kmeans.labels_)):
+            df.loc[kmeans.labels_ == label, 'group'] = i
+        for estimated_p0, estimated_p1, group in df[['estimated_p0', 'estimated_p1', 'group']].sample(frac=1).reset_index(drop=1).values:
+            axs[1].scatter(np.array([estimated_p0]), np.array([estimated_p1]), color=colors[int(group)])
+        axs[1].scatter(kmeans.cluster_centers_[:,0], kmeans.cluster_centers_[:,1], color='black', marker='x')
+
+
+        axs[0].set_title('Real')
+        axs[1].set_title('Estimated')
+
+        for i, ax in enumerate(axs):
+            ax.set_ylabel(f'p1 {"(length)" if i==0 else ""}')
+            ax.set_xlabel(f'p0 {"(masspole)" if i==0 else ""}')
+            ax.set_yticks(range(-1,2))
+            ax.set_xticks(range(-1,2))
+            ax.set_ylim(-.5,3)
+            ax.set_xlim(-.5,1.1)
+
+        return axs
