@@ -337,6 +337,7 @@ class Experiment_Data:
     def get_evaluation_metrics(self, data:pd.DataFrame = None, p=True) -> pd.DataFrame:
         data = self.evaluation_data.copy() if data is None else data.copy()
         expansions = {
+            's_': ['s_0', 's_1', 's_2', 's_3'],
             's__': ['s0', 's1', 's2', 's3'],
             'estimated_s': ['estimated_s0', 'estimated_s1', 'estimated_s2', 'estimated_s3']
         }
@@ -355,12 +356,12 @@ class Experiment_Data:
 
         results[f'rse_r'] = rse(results.r, results.estimated_r)
         
-        results['rse_s0_normalized'] = (results['rse_s0'] - results['rse_s0'].min()) / (results['rse_s0'].max() - results['rse_s0'].min())
-        results['rse_s1_normalized'] = (results['rse_s1'] - results['rse_s1'].min()) / (results['rse_s1'].max() - results['rse_s1'].min())
-        results['rse_s2_normalized'] = (results['rse_s2'] - results['rse_s2'].min()) / (results['rse_s2'].max() - results['rse_s2'].min())
-        results['rse_s3_normalized'] = (results['rse_s3'] - results['rse_s3'].min()) / (results['rse_s3'].max() - results['rse_s3'].min())
+        results['rse_s0_normalized'] = (results['rse_s0'] - results['s_0'].min()) / (results['s_0'].max() - results['s_0'].min())
+        results['rse_s1_normalized'] = (results['rse_s1'] - results['s_1'].min()) / (results['s_1'].max() - results['s_1'].min())
+        results['rse_s2_normalized'] = (results['rse_s2'] - results['s_2'].min()) / (results['s_2'].max() - results['s_2'].min())
+        results['rse_s3_normalized'] = (results['rse_s3'] - results['s_3'].min()) / (results['s_3'].max() - results['s_3'].min())
         results['rse'] = results['rse_s0'] + results['rse_s1'] + results['rse_s2'] + results['rse_s3']
-        results['rse_normalized'] = (results['rse'] - results['rse'].min()) / (results['rse'].max() - results['rse'].min())
+        # results['rse_normalized'] = (results['rse'] - results['rse'].min()) / (results['rse'].max() - results['rse'].min())
 
         return results
 
@@ -426,12 +427,13 @@ class Experiment_Data:
 
         return axs
     
-    def plot_episode_progression_with_predictions(self, axs:axes.Axes, episode:int=0) -> axes.Axes:
+    def plot_episode_progression_with_predictions(self, axs:axes.Axes, episode:int=0, df:pd.DataFrame = None) -> axes.Axes:
         # df = self.get_raw_data_expanded()
-        df = get_data_expanded(self.evaluation_data[self.evaluation_data.episode==episode], {
-            's_':['s0','s1','s2','s3'], 's__':['s_0','s_1','s_2','s_3'], 'p':['p_0','p_1'],
-            'estimated_s':['estimated_s0','estimated_s1','estimated_s2','estimated_s3'], #'estimated_p':['estimated_p_0','estimated_p_1']
-        })
+        if df is None:
+            df = get_data_expanded(self.evaluation_data[self.evaluation_data.episode==episode], {
+                's_':['s0','s1','s2','s3'], 's__':['s_0','s_1','s_2','s_3'], 'p':['p_0','p_1'],
+                'estimated_s':['estimated_s0','estimated_s1','estimated_s2','estimated_s3'], #'estimated_p':['estimated_p_0','estimated_p_1']
+            })
 
         actions = ['<','>']
         actions_colors = ['white','black']
@@ -536,7 +538,7 @@ class Experiment_Data:
         for i, label in enumerate(np.unique(kmeans.labels_)):
             df.loc[kmeans.labels_ == label, 'group'] = i
         for estimated_p0, estimated_p1, group in df[['estimated_p0', 'estimated_p1', 'group']].sample(frac=1).reset_index(drop=1).values:
-            axs[1].scatter(np.array([estimated_p0]), np.array([estimated_p1]), color=colors[int(group)])
+            axs[1].scatter(np.array([estimated_p0]), np.array([estimated_p1]), color=colors[int(group)], marker='.')
         axs[1].scatter(kmeans.cluster_centers_[:,0], kmeans.cluster_centers_[:,1], color='black', marker='x')
 
 

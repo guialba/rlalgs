@@ -9,6 +9,55 @@ from pmbrl.data import Experiment_Data, get_data_expanded
 
 
 ## Loss Functions
+class Regularized_Reference_Loss_Normalized(nn.MSELoss):
+    def forward(self, s:torch.Tensor, y:torch.Tensor, p:torch.Tensor, positive:torch.Tensor, negative:torch.Tensor,
+                alpha=1,
+                beta=1,
+                gamma=1,
+                lambda_=0.001, 
+                *args, **kargs
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        def normilize(v): 
+            mins = kargs['_s'].min(axis=0).values.repeat((v.shape[0], 1))
+            maxs = kargs['_s'].max(axis=0).values.repeat((v.shape[0], 1))
+            rang = maxs - mins
+            return (v - mins) / rang
+
+        mse_s_ = torch.mean(f.mse_loss(normilize(s),normilize(y), reduction='none'), axis=0)
+        mse_positive = torch.mean(f.mse_loss(p,positive, reduction='none'), axis=0)
+        mse_negative = torch.mean(f.mse_loss(p,negative, reduction='none'), axis=0)
+        
+        # mse_s_ = super().forward(s, y)
+        # mse_positive = super().forward(p, positive)
+        # mse_negative = super().forward(p, negative)
+        regularize = torch.mean(torch.pow(p, 2) + torch.pow(positive, 2) + torch.pow(negative, 2))
+
+        loss = alpha*mse_positive.sum() + beta*(-mse_negative.sum()) + gamma*mse_s_.sum() + lambda_*regularize
+        return (
+            loss.float(),
+            {
+                'mse_positive': mse_positive.tolist(), 'mse_negative': mse_negative.tolist(), 'mse_s': mse_s_.tolist(), 'regularize': regularize.item(),
+            }
+        )
+
+class Triplet_Loss_Normalized(nn.MSELoss):
+    def forward(self, s:torch.Tensor, y:torch.Tensor, p:torch.Tensor, positive:torch.Tensor, negative:torch.Tensor, *args, **kargs)-> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        def normilize(v): 
+            mins = kargs['_s'].min(axis=0).values.repeat((v.shape[0], 1))
+            maxs = kargs['_s'].max(axis=0).values.repeat((v.shape[0], 1))
+            rang = maxs - mins
+            return (v - mins) / rang
+
+        # mse_s = super().forward(s, y)
+        triplet = f.triplet_margin_loss(p, positive, negative)
+        mse_s = torch.mean(f.mse_loss(normilize(s),normilize(y), reduction='none'), axis=0)
+        loss = triplet + mse_s.sum()
+        return (
+            loss.float(),
+            {'triplet': triplet.item(), 'mse_s': mse_s.tolist()}
+        )
+
+
 class Regularized_Reference_Loss(nn.MSELoss):
     def forward(self, s:torch.Tensor, y:torch.Tensor, p:torch.Tensor, positive:torch.Tensor, negative:torch.Tensor,
                 alpha=1,
