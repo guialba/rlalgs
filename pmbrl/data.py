@@ -361,7 +361,7 @@ class Experiment_Data:
         results['rse_s2_normalized'] = (results['rse_s2'] - results['s_2'].min()) / (results['s_2'].max() - results['s_2'].min())
         results['rse_s3_normalized'] = (results['rse_s3'] - results['s_3'].min()) / (results['s_3'].max() - results['s_3'].min())
         results['rse'] = results['rse_s0'] + results['rse_s1'] + results['rse_s2'] + results['rse_s3']
-        # results['rse_normalized'] = (results['rse'] - results['rse'].min()) / (results['rse'].max() - results['rse'].min())
+        results['rse_normalized'] = (results['rse_s0_normalized'] + results['rse_s1_normalized'] + results['rse_s2_normalized'] + results['rse_s3_normalized'])/4
 
         return results
 

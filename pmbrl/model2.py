@@ -48,13 +48,25 @@ class Triplet_Loss_Normalized(nn.MSELoss):
             rang = maxs - mins
             return (v - mins) / rang
 
+        margin = kargs.get('margin', 1)
+
         # mse_s = super().forward(s, y)
-        triplet = f.triplet_margin_loss(p, positive, negative)
         mse_s = torch.mean(f.mse_loss(normilize(s),normilize(y), reduction='none'), axis=0)
+        triplet = torch.mean(f.triplet_margin_loss(p, positive, negative, margin=margin, reduction='none'), axis=0)
+        # triplet_p0 = torch.mean(f.triplet_margin_loss(p[:,0:1], positive[:,0:1], negative[:,0:1], margin=margin, reduction='none'), axis=0)
+        # triplet_p1 = torch.mean(f.triplet_margin_loss(p[:,1:], positive[:,1:], negative[:,1:], margin=margin, reduction='none'), axis=0)
+        # loss = triplet_p0.sum() + triplet_p1.sum() + mse_s.sum()
         loss = triplet + mse_s.sum()
         return (
             loss.float(),
-            {'triplet': triplet.item(), 'mse_s': mse_s.tolist()}
+            {
+                # 'triplet_p0': triplet_p0.tolist(), 
+                # 'triplet_p1': triplet_p1.tolist(), 
+                # 'triplet': (triplet_p0.sum() + triplet_p1.sum()).item(), 
+                # 'triplet_old': triplet.item(), 
+                'triplet': triplet.item(), 
+                'mse_s': mse_s.tolist()
+            }
         )
 
 
